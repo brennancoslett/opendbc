@@ -14,10 +14,19 @@ from opendbc.safety.tests.common import CANPackerSafety
 PREAP_FLAG_ENABLE_PEDAL = 1
 PREAP_FLAG_RADAR_EMULATION = 2
 PREAP_FLAG_RADAR_BEHIND_NOSECONE = 4
+PREAP_FLAG_VISION_ACC = 8
 
 # Stalk lever positions from tesla_preap.h
 STALK_FWD_CANCEL = 1
 STALK_RWD_ENGAGE = 2
+
+# Speed-adjust stalk lever values (STW_ACTN_RQ.SpdCtrlLvr_Stat)
+STALK_UP_1ST = 16   # SET_ACCEL / RES_ACCEL — also used by the base engage FSM
+STALK_UP_2ND = 4    # RES_ACCEL_2ND — vision-ACC exclusive
+STALK_DN_1ST = 32   # DECEL_SET — also used by the base renorm FSM
+STALK_DN_2ND = 8    # DECEL_2ND — vision-ACC exclusive
+
+PREAP_SPEED_BUTTON_TX_MIN_INTERVAL_US = 400000  # matches tesla_preap.h
 
 
 def _fix_epas_checksum(msg):
@@ -133,6 +142,9 @@ class TeslaPreAPTestMixin(common.CarSafetyTest, common.AngleSteeringSafetyTest):
 
   def _pcm_status_msg(self, enable):
     lever = STALK_RWD_ENGAGE if enable else STALK_FWD_CANCEL
+    return self.packer.make_can_msg_safety("STW_ACTN_RQ", 0, {"SpdCtrlLvr_Stat": lever})
+
+  def _stalk_button_msg(self, lever):
     return self.packer.make_can_msg_safety("STW_ACTN_RQ", 0, {"SpdCtrlLvr_Stat": lever})
 
   def _gear_msg(self, gear):
@@ -608,6 +620,82 @@ class TestTeslaPreAPWithPedal(TeslaPreAPTestMixin, unittest.TestCase):
                                                  {"GAS_COMMAND": 100, "ENABLE": 0})
     self.assertFalse(self._tx(attack_msg),
                      "ENABLE=0 with high GAS_COMMAND must be blocked (defense-in-depth)")
+
+
+class TestTeslaPreAPStalkButtonGating(TeslaPreAPTestMixin, unittest.TestCase):
+  """Panda-side backstop for vision-ACC stalk speed buttons.
+
+  UP_2ND/DN_2ND (RES_ACCEL_2ND/DECEL_2ND) are only ever sent by the vision-ACC
+  speed modulator — the base engage/cancel/renorm FSM only uses CANCEL/
+  SET_ACCEL/DECEL_SET (stock_cc_spoofer.py) — so they're flag-gated. All four
+  speed-adjust values are additionally rate-limited while vision ACC is
+  active, as a floor beneath vision_acc.py's own 500ms spacing gate.
+  """
+  __test__ = True
+
+  def setUp(self):
+    super().setUp()
+    self._setup_safety_hooks()
+
+  def _setup_safety_hooks(self, vision_acc=True):
+    flags = PREAP_FLAG_VISION_ACC if vision_acc else 0
+    self.safety.set_safety_hooks(CarParams.SafetyModel.teslaPreap, flags)
+    self.safety.init_tests()
+
+  def test_2nd_detent_buttons_blocked_without_flag(self):
+    self._setup_safety_hooks(vision_acc=False)
+    self.safety.set_controls_allowed(True)
+    for lever in (STALK_UP_2ND, STALK_DN_2ND):
+      self.assertFalse(self._tx(self._stalk_button_msg(lever)),
+                       f"lever {lever} must be blocked without PREAP_FLAG_VISION_ACC")
+
+  def test_2nd_detent_buttons_allowed_with_flag(self):
+    for lever in (STALK_UP_2ND, STALK_DN_2ND):
+      self.setUp()
+      self.safety.set_controls_allowed(True)
+      # Past the rate-limit floor from a fresh (timer=0) safety init.
+      self.safety.set_timer(PREAP_SPEED_BUTTON_TX_MIN_INTERVAL_US + 1000)
+      self.assertTrue(self._tx(self._stalk_button_msg(lever)),
+                      f"lever {lever} must be allowed with PREAP_FLAG_VISION_ACC")
+
+  def test_1st_detent_buttons_unaffected_by_flag(self):
+    # SET_ACCEL/DECEL_SET are shared with the base engage/renorm FSM and must
+    # keep working regardless of the vision-ACC flag.
+    self._setup_safety_hooks(vision_acc=False)
+    self.safety.set_controls_allowed(True)
+    for lever in (STALK_UP_1ST, STALK_DN_1ST):
+      self.assertTrue(self._tx(self._stalk_button_msg(lever)),
+                      f"lever {lever} must not require PREAP_FLAG_VISION_ACC")
+
+  def test_invalid_lever_value_blocked(self):
+    self.safety.set_controls_allowed(True)
+    for lever in (3, 5, 6, 7, 9, 63):
+      self.assertFalse(self._tx(self._stalk_button_msg(lever)),
+                       f"invalid lever {lever} must be blocked")
+
+  def test_speed_button_rate_limited_with_vision_acc(self):
+    self.safety.set_controls_allowed(True)
+    # Past the rate-limit floor from a fresh (timer=0) safety init.
+    t0 = PREAP_SPEED_BUTTON_TX_MIN_INTERVAL_US + 1000
+    self.safety.set_timer(t0)
+    self.assertTrue(self._tx(self._stalk_button_msg(STALK_UP_2ND)))
+    # Immediately retrying, even a different speed-adjust button, must be blocked
+    self.assertFalse(self._tx(self._stalk_button_msg(STALK_DN_2ND)),
+                     "second speed-adjust press inside the floor window must be blocked")
+    # Just under the floor: still blocked
+    self.safety.set_timer(t0 + PREAP_SPEED_BUTTON_TX_MIN_INTERVAL_US - 1000)
+    self.assertFalse(self._tx(self._stalk_button_msg(STALK_UP_2ND)))
+    # Past the floor: allowed again
+    self.safety.set_timer(t0 + PREAP_SPEED_BUTTON_TX_MIN_INTERVAL_US + 1000)
+    self.assertTrue(self._tx(self._stalk_button_msg(STALK_UP_2ND)))
+
+  def test_cancel_not_rate_limited(self):
+    # A cancel must never be delayed by the speed-button rate limiter.
+    self.safety.set_controls_allowed(True)
+    self.safety.set_timer(PREAP_SPEED_BUTTON_TX_MIN_INTERVAL_US + 1000)
+    self.assertTrue(self._tx(self._stalk_button_msg(STALK_UP_2ND)))
+    # Cancel immediately after a speed press — must still go through
+    self.assertTrue(self._tx(self._stalk_button_msg(STALK_FWD_CANCEL)))
 
 
 if __name__ == "__main__":

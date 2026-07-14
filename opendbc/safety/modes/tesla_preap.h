@@ -46,6 +46,8 @@
 //   - AEB events blocked from openpilot
 //   - EPB_epasControl mode validation
 //   - Pedal TX gated by PREAP_FLAG_ENABLE_PEDAL + get_longitudinal_allowed()
+//   - Stalk speed-button TX (0x45) value-validated, vision-ACC-exclusive
+//     buttons gated by PREAP_FLAG_VISION_ACC, and rate-limited while active
 //
 // Completely independent from tesla_legacy.h — has its own hooks struct,
 // counter/checksum functions, init, RX/TX/fwd hooks, and GTW emulation.
@@ -78,6 +80,7 @@ void can_set_checksum(CANPacket_t *packet);
 #define PREAP_FLAG_ENABLE_PEDAL         1U
 #define PREAP_FLAG_RADAR_EMULATION      2U
 #define PREAP_FLAG_RADAR_BEHIND_NOSECONE 4U
+#define PREAP_FLAG_VISION_ACC           8U
 
 // ============================================
 // State variables
@@ -86,6 +89,7 @@ void can_set_checksum(CANPacket_t *packet);
 static bool preap_enable_pedal = false;
 static bool preap_radar_emulation = false;
 static bool preap_radar_behind_nosecone = false;
+static bool preap_vision_acc = false;
 
 static int preap_pedal_can = -1;
 
@@ -97,6 +101,18 @@ static bool preap_doors_open = false;
 // Stalk echo filter
 static uint32_t preap_last_stalk_engage_us = 0;
 #define PREAP_CANCEL_ECHO_WINDOW_US 600000U  // 600ms
+
+// Vision-ACC speed-button TX backstop. RES_ACCEL_2ND/DECEL_2ND (UP_2ND/DN_2ND)
+// are only ever sent by the vision-ACC speed modulator (base engage/cancel/
+// renorm FSM uses CANCEL/SET_ACCEL/DECEL_SET exclusively, see stock_cc_spoofer.py)
+// so they're hard-blocked unless PREAP_FLAG_VISION_ACC is set. All four speed-
+// adjust values are additionally rate-limited while vision ACC is active, as a
+// panda-side floor under the python spacing gate (vision_acc.py
+// AUTO_ACTION_SPACING_MS=500ms) — set below it so python's own spacing is what
+// normally binds and this only catches a runaway/bugged caller. CANCEL and MAIN
+// are exempt: a cancel must never be delayed.
+static uint32_t preap_last_speed_button_tx_us = 0;
+#define PREAP_SPEED_BUTTON_TX_MIN_INTERVAL_US 400000U  // 400ms
 
 // Radar emulation state
 static int preap_radar_status = 0;
@@ -543,6 +559,34 @@ static bool tesla_preap_tx_hook(const CANPacket_t *msg) {
     }
   }
 
+  // STW_ACTN_RQ (0x45): stalk-button spoof. See PREAP_FLAG_VISION_ACC comment
+  // above for why RES_ACCEL_2ND/DECEL_2ND are flag-gated and all four speed-
+  // adjust values are rate-limited, while CANCEL/MAIN are not.
+  if (msg->addr == 0x45U) {
+    int lever = msg->data[0] & 0x3FU;
+    bool valid_lever = (lever == 0) || (lever == 1) || (lever == 2) ||
+                        (lever == 4) || (lever == 8) || (lever == 16) || (lever == 32);
+    if (!valid_lever) {
+      violation = true;
+    } else if ((lever == 4) || (lever == 8)) {
+      // RES_ACCEL_2ND / DECEL_2ND: vision-ACC-exclusive
+      if (!preap_vision_acc) {
+        violation = true;
+      }
+    }
+
+    if (!violation && ((lever == 4) || (lever == 8) || (lever == 16) || (lever == 32))) {
+      if (preap_vision_acc) {
+        uint32_t now = microsecond_timer_get();
+        if ((now - preap_last_speed_button_tx_us) < PREAP_SPEED_BUTTON_TX_MIN_INTERVAL_US) {
+          violation = true;
+        } else {
+          preap_last_speed_button_tx_us = now;
+        }
+      }
+    }
+  }
+
   if (violation) {
     tx = false;
   }
@@ -569,6 +613,7 @@ static safety_config tesla_preap_init(uint16_t param) {
   preap_enable_pedal = GET_FLAG(param, PREAP_FLAG_ENABLE_PEDAL);
   preap_radar_emulation = GET_FLAG(param, PREAP_FLAG_RADAR_EMULATION);
   preap_radar_behind_nosecone = GET_FLAG(param, PREAP_FLAG_RADAR_BEHIND_NOSECONE);
+  preap_vision_acc = GET_FLAG(param, PREAP_FLAG_VISION_ACC);
 
   preap_gear = 4;
   preap_gear_prev = 4;
@@ -577,6 +622,7 @@ static safety_config tesla_preap_init(uint16_t param) {
   preap_radar_status = 0;
   preap_last_radar_signal = 0;
   preap_last_stalk_engage_us = 0;
+  preap_last_speed_button_tx_us = 0;
   preap_radar_position = preap_radar_behind_nosecone ? 1 : 0;
 
   // TX whitelist — no harness relay on Pre-AP
