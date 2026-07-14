@@ -26,7 +26,7 @@ STALK_UP_2ND = 4    # RES_ACCEL_2ND — vision-ACC exclusive
 STALK_DN_1ST = 32   # DECEL_SET — also used by the base renorm FSM
 STALK_DN_2ND = 8    # DECEL_2ND — vision-ACC exclusive
 
-PREAP_SPEED_BUTTON_TX_MIN_INTERVAL_US = 400000  # matches tesla_preap.h
+PREAP_SPEED_BUTTON_TX_MIN_INTERVAL_US = 300000  # matches tesla_preap.h
 
 
 def _fix_epas_checksum(msg):

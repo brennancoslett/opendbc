@@ -119,43 +119,84 @@ class TestControllerGating:
     vacc._current_time_millis = lambda: int(round(time.time() * 1000))
 
   def test_happy_path_decel(self):
-    # 30 m/s = 108 kph, planner wants -1.5 m/s² → desired ~99.9 (offset -8.1,
-    # inside the -3..-10 kph band) → full-detent decel
+    # 30 m/s = 108 kph, planner wants -1.0 m/s² (above ACCEL_CANCEL_THRESHOLD,
+    # so this exercises the normal offset table) → desired ~102.6 (offset
+    # -5.4, inside the -3..-10 kph band) → full-detent decel
     cs = make_cs(cc_set_kph=108.0)
-    btn = self.ctrl.update(make_cc(accel=-1.5), cs, frame=0)
+    btn = self.ctrl.update(make_cc(accel=-1.0), cs, frame=0)
     assert btn == CruiseButtons.DECEL_2ND
 
   def test_inactive_fsm_returns_none(self):
     cs = make_cs(enable_long=False)
-    assert self.ctrl.update(make_cc(accel=-1.5), cs, frame=0) is None
+    assert self.ctrl.update(make_cc(accel=-1.0), cs, frame=0) is None
 
   def test_long_not_active_returns_none(self):
     cs = make_cs(cc_set_kph=108.0)
-    assert self.ctrl.update(make_cc(long_active=False, accel=-1.5), cs, frame=0) is None
+    assert self.ctrl.update(make_cc(long_active=False, accel=-1.0), cs, frame=0) is None
 
   def test_gas_pressed_returns_none(self):
     cs = make_cs(gas_pressed=True, cc_set_kph=108.0)
-    assert self.ctrl.update(make_cc(accel=-1.5), cs, frame=0) is None
+    assert self.ctrl.update(make_cc(accel=-1.0), cs, frame=0) is None
 
   def test_di_not_enabled_returns_none(self):
     cs = make_cs(di_state="STANDBY", cc_set_kph=108.0)
-    assert self.ctrl.update(make_cc(accel=-1.5), cs, frame=0) is None
+    assert self.ctrl.update(make_cc(accel=-1.0), cs, frame=0) is None
 
   def test_human_action_holdoff(self):
     cs = make_cs(cc_set_kph=108.0, last_human_ms=self.t_ms - HUMAN_ACTION_HOLDOFF_MS + 100)
-    assert self.ctrl.update(make_cc(accel=-1.5), cs, frame=0) is None
+    assert self.ctrl.update(make_cc(accel=-1.0), cs, frame=0) is None
     # Holdoff expired → decision resumes
     self.t_ms += 200
-    assert self.ctrl.update(make_cc(accel=-1.5), cs, frame=1) is not None
+    assert self.ctrl.update(make_cc(accel=-1.0), cs, frame=1) is not None
 
   def test_automated_press_spacing(self):
     cs = make_cs(cc_set_kph=108.0)
-    assert self.ctrl.update(make_cc(accel=-1.5), cs, frame=0) is not None
+    assert self.ctrl.update(make_cc(accel=-1.0), cs, frame=0) is not None
     # Immediately after: spaced out
     self.t_ms += 100
-    assert self.ctrl.update(make_cc(accel=-1.5), cs, frame=1) is None
+    assert self.ctrl.update(make_cc(accel=-1.0), cs, frame=1) is None
     self.t_ms += AUTO_ACTION_SPACING_MS
-    assert self.ctrl.update(make_cc(accel=-1.5), cs, frame=2) is not None
+    assert self.ctrl.update(make_cc(accel=-1.0), cs, frame=2) is not None
+
+
+class TestHardBrakingBypass:
+  """ACCEL_CANCEL_THRESHOLD: drive 00000009--2dd6a2315a showed a -1.50 m/s^2
+  event still resolve to a half-step DN_1ST because calc_button()'s
+  offset_kph self-corrects (each auto-press drags cc_set_kph toward the
+  target) before the -2*full_kph CANCEL gap ever opens. These tests cover
+  the direct accel bypass added to fix that.
+  """
+
+  def setup_method(self):
+    self.ctrl = VisionACCController()
+    self.t_ms = 1_000_000
+    vacc._current_time_millis = lambda: self.t_ms
+
+  def teardown_method(self):
+    import time
+    vacc._current_time_millis = lambda: int(round(time.time() * 1000))
+
+  def test_hard_braking_cancels_instead_of_stepping(self):
+    # Same setup as test_happy_path_decel (offset would be a DECEL_2ND
+    # step), but accel is below threshold → CANCEL instead
+    cs = make_cs(cc_set_kph=108.0)
+    btn = self.ctrl.update(make_cc(accel=-1.5), cs, frame=0)
+    assert btn == CruiseButtons.CANCEL
+
+  def test_hard_braking_bypasses_human_holdoff(self):
+    cs = make_cs(cc_set_kph=108.0, last_human_ms=self.t_ms - HUMAN_ACTION_HOLDOFF_MS + 100)
+    assert self.ctrl.update(make_cc(accel=-1.5), cs, frame=0) == CruiseButtons.CANCEL
+
+  def test_hard_braking_bypasses_action_spacing(self):
+    cs = make_cs(cc_set_kph=108.0)
+    assert self.ctrl.update(make_cc(accel=-1.5), cs, frame=0) == CruiseButtons.CANCEL
+    self.t_ms += 100
+    assert self.ctrl.update(make_cc(accel=-1.5), cs, frame=1) == CruiseButtons.CANCEL
+
+  def test_just_above_threshold_does_not_cancel(self):
+    cs = make_cs(cc_set_kph=108.0)
+    btn = self.ctrl.update(make_cc(accel=-1.29), cs, frame=0)
+    assert btn != CruiseButtons.CANCEL
 
 
 def pull_main(eng, t_ms, *, vision_acc=True, v_ego=25.0, di_state="STANDBY"):

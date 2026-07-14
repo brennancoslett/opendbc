@@ -108,11 +108,13 @@ static uint32_t preap_last_stalk_engage_us = 0;
 // so they're hard-blocked unless PREAP_FLAG_VISION_ACC is set. All four speed-
 // adjust values are additionally rate-limited while vision ACC is active, as a
 // panda-side floor under the python spacing gate (vision_acc.py
-// AUTO_ACTION_SPACING_MS=500ms) — set below it so python's own spacing is what
-// normally binds and this only catches a runaway/bugged caller. CANCEL and MAIN
-// are exempt: a cancel must never be delayed.
+// AUTO_ACTION_SPACING_MS=400ms) — set below it so python's own spacing is what
+// normally binds and this only catches a runaway/bugged caller. Kept below
+// python's value rather than equal to it, so clock jitter between the two
+// can't cause panda to block a send python thought was already spaced out.
+// CANCEL and MAIN are exempt: a cancel must never be delayed.
 static uint32_t preap_last_speed_button_tx_us = 0;
-#define PREAP_SPEED_BUTTON_TX_MIN_INTERVAL_US 400000U  // 400ms
+#define PREAP_SPEED_BUTTON_TX_MIN_INTERVAL_US 300000U  // 300ms
 
 // Radar emulation state
 static int preap_radar_status = 0;

@@ -37,8 +37,20 @@ ACCEL_PROJECTION_S = 1.5
 # stalk action (tesla-unity used 3s)
 HUMAN_ACTION_HOLDOFF_MS = 3000
 # Spacing between automated presses — the DI needs time to act on each step
-# (tesla-unity used 400ms; spoofer TX slots are 100ms apart)
-AUTO_ACTION_SPACING_MS = 500
+# (tesla-unity value). Drive log 00000009--2dd6a2315a showed presses landing
+# at a rigid ~500ms cadence through every accel/decel ramp (e.g. 7 straight
+# DN_1ST steps at 1784069147-149), reported back as "stuttery"
+# acceleration/deceleration — tune this if 400ms doesn't help.
+AUTO_ACTION_SPACING_MS = 400
+
+# Below this requested accel, stepped set-speed nudges can't track the
+# request in time: cc_set_kph gets dragged down by each auto-press, which
+# closes calc_button()'s offset_kph gap before it ever crosses the CANCEL
+# threshold. Drive log 00000009--2dd6a2315a showed a -1.50 m/s^2 event
+# (well under ACCEL_MIN=-3.48) still resolve to a half-step DN_1ST because
+# of this self-correction. Bypass the offset math and holdoff/spacing gates
+# entirely and drop CC now — the driver is the brakes.
+ACCEL_CANCEL_THRESHOLD = -1.3
 
 
 def _current_time_millis():
@@ -83,6 +95,12 @@ class VisionACCController:
     # and after a CANCEL the driver must double-pull to rearm (no autoresume)
     if getattr(CS, "di_cruise_state", "OFF") != "ENABLED":
       return None
+
+    # Hard braking ahead: bypass the holdoff/spacing gates below (this is a
+    # safety cutoff, not a set-speed nudge) and skip calc_button()'s
+    # offset-based CANCEL path, which self-corrects too fast to ever trigger.
+    if CC.actuators.accel < ACCEL_CANCEL_THRESHOLD:
+      return CruiseButtons.CANCEL
 
     now = _current_time_millis()
     engagement = getattr(CS, "engagement", None)
