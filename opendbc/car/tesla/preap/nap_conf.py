@@ -23,6 +23,7 @@ DEFAULT_CONFIG = {
   'double_pull_window_ms': 400,
   'use_pedal': False,
   'vision_acc': False,
+  'vision_acc_live_tx': False,
   'pedal_calibrated': False,
   'accel_profile': 'Chill',
   'pedal_can_zero': False,
@@ -168,6 +169,18 @@ class NAPConf:
   @vision_acc.setter
   def vision_acc(self, value):
     self._put_param_bool(NAPParamKeys.VISION_ACC, 'vision_acc', value)
+
+  @property
+  def vision_acc_live_tx(self):
+    """Actually transmit vision-ACC stalk-button decisions instead of just
+    logging them. Read live every carcontroller tick (see vision_acc.py) so
+    it can be flipped on mid-drive, after watching a dry-run's logged
+    decisions look sane, without a reboot or redeploy."""
+    return self._get_param_bool(NAPParamKeys.VISION_ACC_LIVE_TX, 'vision_acc_live_tx')
+
+  @vision_acc_live_tx.setter
+  def vision_acc_live_tx(self, value):
+    self._put_param_bool(NAPParamKeys.VISION_ACC_LIVE_TX, 'vision_acc_live_tx', value)
 
   @property
   def radar_enabled(self):

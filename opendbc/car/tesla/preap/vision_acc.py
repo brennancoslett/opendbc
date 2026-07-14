@@ -12,19 +12,20 @@ Decel authority is whatever the DI does when its set speed drops — motor
 regen only, no friction brakes. Large decel requests CANCEL the stock CC
 instead (coasting regen beats CC's shallow slew). The driver is the brakes.
 
-Phase 1 is a DRY RUN: LIVE_TX is False, decisions are logged via carlog and
-never transmitted. Flip LIVE_TX only together with the tesla_preap.h safety
-gating for spoofed speed buttons (PREAP_FLAG_VISION_ACC).
+Decisions are always computed and logged via carlog. Whether they are
+actually transmitted is controlled by nap_conf.vision_acc_live_tx
+(NAPVisionACCLiveTX param, see carcontroller.py) — off by default so a
+fresh install is a dry run, and toggleable from the NAP settings panel
+without a reboot or redeploy so a dry-run drive's logged decisions can be
+reviewed before flipping it live. The tesla_preap.h safety-mode button
+gating (PREAP_FLAG_VISION_ACC) enforces the button values and TX rate
+regardless of this setting.
 """
 import time
 
 from opendbc.car.carlog import carlog
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.tesla.values import CruiseButtons
-
-# Phase 2 switch: transmit decisions through StockCCSpoofer instead of
-# logging them. Keep False until the safety-mode button gating lands.
-LIVE_TX = False
 
 # Stock CC on Pre-AP Model S only operates above ~17 mph (tesla-unity value)
 MIN_CRUISE_SPEED_MS = 17.1 * CV.MPH_TO_MS

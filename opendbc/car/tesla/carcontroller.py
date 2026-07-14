@@ -10,7 +10,7 @@ from opendbc.car.vehicle_model import VehicleModel
 from opendbc.car.tesla.preap.carcontroller import PreAPLongController, init_preap_can
 from opendbc.car.tesla.preap.nap_conf import nap_conf
 from opendbc.car.tesla.preap.stock_cc_spoofer import StockCCSpoofer
-from opendbc.car.tesla.preap.vision_acc import VisionACCController, LIVE_TX as VISION_ACC_LIVE_TX
+from opendbc.car.tesla.preap.vision_acc import VisionACCController
 
 
 def get_safety_CP():
@@ -118,11 +118,13 @@ class CarController(CarControllerBase):
       can_sends.extend(self.preap_long.update(CC, CS, self.frame, self.tesla_can, CANBUS.party))
 
     # Vision ACC (no pedal): translate the planner's accel request into
-    # stock-CC set-speed button decisions. Phase 1 is a dry run (LIVE_TX
-    # False in vision_acc.py): decisions are logged, never transmitted.
+    # stock-CC set-speed button decisions. Always computed and logged;
+    # actually transmitted only when nap_conf.vision_acc_live_tx is set
+    # (NAPVisionACCLiveTX param) — read live so it can be flipped on
+    # mid-drive without a reboot, once a dry run's logged decisions look sane.
     if self.CP.openpilotLongitudinalControl and not nap_conf.use_pedal:
       vacc_button = self.vision_acc.update(CC, CS, self.frame)
-      if vacc_button is not None and VISION_ACC_LIVE_TX:
+      if vacc_button is not None and nap_conf.vision_acc_live_tx:
         if vacc_button == CruiseButtons.CANCEL:
           CS.preap_cc_cancel_needed = True
         else:
