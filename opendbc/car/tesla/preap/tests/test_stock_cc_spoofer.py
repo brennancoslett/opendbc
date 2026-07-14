@@ -208,3 +208,107 @@ class TestCounterMath:
     # Counter = (15+1) % 16 = 0
     last_call = can.create_action_request.call_args_list[-1]
     assert last_call.args[2] == 0
+
+
+# ---- Stale-resume normalization ----
+
+def make_cs_renorm(*, di_cruise_state, v_set_kph, v_ego_ms=11.2):
+  """CS for renorm tests: 11.2 m/s ~= 40.3 kph ~= 25 mph."""
+  cs = make_cs(di_cruise_state=di_cruise_state)
+  cs.v_cruise_actual_kph = v_set_kph
+  cs.out = SimpleNamespace(vEgo=v_ego_ms)
+  cs.engagement = SimpleNamespace(preap_last_cc_spoof_ms=0, preap_last_speed_spoof_ms=-10000)
+  return cs
+
+
+def buttons_sent(can):
+  return [c.args[0] for c in can.create_action_request.call_args_list]
+
+
+class TestStaleResumeRenorm:
+  """The physical stalk pull RESUMES the stored set speed on the pre-AP DI,
+  so a double-pull after an earlier faster cruise leaves the CC chasing a
+  stale number (2026-07-14 drive 3: pull at 25 mph resumed 48 mph). ENGAGING
+  must cancel and re-set with a down-detent instead of accepting it."""
+
+  def test_fresh_set_exits_engaging_without_renorm(self):
+    s = StockCCSpoofer()
+    can = make_can()
+    cs = make_cs_renorm(di_cruise_state="ENABLED", v_set_kph=40.0)  # ~vEgo, fresh
+    cs.preap_cc_engage_needed = True
+    s.update(cs, frame=0, tesla_can=can, can_bus_party=CAN_BUS)
+    s.update(cs, frame=10, tesla_can=can, can_bus_party=CAN_BUS)
+    assert s.cc_engage_phase == 0  # IDLE
+    assert buttons_sent(can) == []
+
+  def test_stale_resume_cancels_then_sets_with_down_detent(self):
+    s = StockCCSpoofer()
+    can = make_can()
+    # DI resumed a stale 77 kph (48 mph) while doing 40 kph
+    cs = make_cs_renorm(di_cruise_state="ENABLED", v_set_kph=77.0)
+    cs.preap_cc_engage_needed = True
+    # Frame 0 is a TX slot: ENGAGING sees ENABLED+stale immediately -> CANCEL
+    s.update(cs, frame=0, tesla_can=can, can_bus_party=CAN_BUS)
+    assert buttons_sent(can) == [CruiseButtons.CANCEL]
+    assert cs.engagement.preap_last_cc_spoof_ms > 0, "cancel echo must be stamped"
+    # CAN latency: DI still reads ENABLED — dwell, no TX, no phase change
+    s.update(cs, frame=10, tesla_can=can, can_bus_party=CAN_BUS)
+    assert buttons_sent(can) == [CruiseButtons.CANCEL]
+    # DI drops to STANDBY: DN (set at current speed), speed echo stamped
+    cs.di_cruise_state = "STANDBY"
+    s.update(cs, frame=20, tesla_can=can, can_bus_party=CAN_BUS)
+    assert buttons_sent(can) == [CruiseButtons.CANCEL, CruiseButtons.DECEL_SET]
+    assert cs.engagement.preap_last_speed_spoof_ms > 0, "DN echo must be stamped"
+    # DI enables at the fresh speed: done
+    cs.di_cruise_state = "ENABLED"
+    cs.v_cruise_actual_kph = 40.0
+    s.update(cs, frame=30, tesla_can=can, can_bus_party=CAN_BUS)  # RENORM -> ENGAGING
+    s.update(cs, frame=40, tesla_can=can, can_bus_party=CAN_BUS)  # fresh -> IDLE
+    assert s.cc_engage_phase == 0
+    assert buttons_sent(can) == [CruiseButtons.CANCEL, CruiseButtons.DECEL_SET]
+
+  def test_persistent_stale_set_gives_up_after_max_rounds(self):
+    s = StockCCSpoofer()
+    can = make_can()
+    cs = make_cs_renorm(di_cruise_state="ENABLED", v_set_kph=77.0)
+    cs.preap_cc_engage_needed = True
+    # Round 1: cancel at frame 0 (ENABLED+stale on the entry slot)
+    s.update(cs, frame=0, tesla_can=can, can_bus_party=CAN_BUS)    # CANCEL
+    cs.di_cruise_state = "STANDBY"
+    s.update(cs, frame=10, tesla_can=can, can_bus_party=CAN_BUS)   # DECEL_SET
+    cs.di_cruise_state = "ENABLED"                                  # resumed stale again
+    s.update(cs, frame=20, tesla_can=can, can_bus_party=CAN_BUS)   # RENORM -> ENGAGING
+    # Round 2
+    s.update(cs, frame=30, tesla_can=can, can_bus_party=CAN_BUS)   # CANCEL
+    cs.di_cruise_state = "STANDBY"
+    s.update(cs, frame=40, tesla_can=can, can_bus_party=CAN_BUS)   # DECEL_SET
+    cs.di_cruise_state = "ENABLED"
+    s.update(cs, frame=50, tesla_can=can, can_bus_party=CAN_BUS)   # RENORM -> ENGAGING
+    # Rounds exhausted: give up, no further presses
+    s.update(cs, frame=60, tesla_can=can, can_bus_party=CAN_BUS)
+    assert s.cc_engage_phase == 0
+    assert buttons_sent(can) == [CruiseButtons.CANCEL, CruiseButtons.DECEL_SET,
+                                 CruiseButtons.CANCEL, CruiseButtons.DECEL_SET]
+
+  def test_renorm_timeout_fires(self):
+    s = StockCCSpoofer()
+    can = make_can()
+    cs = make_cs_renorm(di_cruise_state="ENABLED", v_set_kph=77.0)
+    cs.preap_cc_engage_needed = True
+    s.update(cs, frame=0, tesla_can=can, can_bus_party=CAN_BUS)    # CANCEL -> RENORM
+    # DI reaches STANDBY but ignores every DN press: overall timeout ends it
+    cs.di_cruise_state = "STANDBY"
+    for f in range(10, 200, 10):
+      s.update(cs, frame=f, tesla_can=can, can_bus_party=CAN_BUS)
+    assert s.cc_engage_phase == 0
+
+  def test_fsm_cancel_aborts_renorm(self):
+    s = StockCCSpoofer()
+    can = make_can()
+    cs = make_cs_renorm(di_cruise_state="ENABLED", v_set_kph=77.0)
+    cs.preap_cc_engage_needed = True
+    s.update(cs, frame=0, tesla_can=can, can_bus_party=CAN_BUS)    # CANCEL -> RENORM
+    cs.preap_cc_cancel_needed = True
+    s.update(cs, frame=1, tesla_can=can, can_bus_party=CAN_BUS)
+    assert s.cc_engage_phase == 0
+    assert s.cancel_pending
