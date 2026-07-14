@@ -68,6 +68,8 @@ def update_preap(cs, can_parsers):
   cs.engagement.handle_steering_disengage(ret.steeringDisengage)
 
   # Cruise state
+  use_pedal = nap_conf.use_pedal
+  vision_acc = nap_conf.vision_acc and not use_pedal
   cruise_state = cs.can_defines["DI_state"]["DI_cruiseState"].get(int(cp_chassis.vl["DI_state"]["DI_cruiseState"]), None)
   cs.di_cruise_state = cruise_state or "OFF"
   speed_units = cs.can_defines["DI_state"]["DI_speedUnits"].get(int(cp_chassis.vl["DI_state"]["DI_speedUnits"]), None)
@@ -77,7 +79,14 @@ def update_preap(cs, can_parsers):
   if speed_units is not None:
     cs.speed_units = speed_units
 
-  if cs.enableLongControl and nap_conf.use_pedal:
+  # Actual stock-CC set speed from the DI, in display units (vision ACC
+  # modulates this via spoofed stalk presses and needs the read-back)
+  di_cruise_set = cp_chassis.vl["DI_state"]["DI_cruiseSet"]
+  cs.v_cruise_actual_kph = di_cruise_set * CV.MPH_TO_KPH if cs.speed_units == "MPH" else di_cruise_set
+
+  if cs.enableLongControl and (use_pedal or vision_acc):
+    # Software-owned set speed: pedal target, or the vision ACC ceiling.
+    # card.py's Pre-AP software-cruise path reads this back as vCruise.
     ret.cruiseState.speed = cs.pedal_speed_kph * CV.KPH_TO_MS
   else:
     if speed_units == "KPH":
@@ -121,7 +130,6 @@ def update_preap(cs, can_parsers):
         cs.prev_stalk_follow = stalk_follow
 
   curr_time_ms = _current_time_millis()
-  use_pedal = nap_conf.use_pedal
   pedal_factor = float(nap_conf.pedal_factor)
   pedal_transform_valid = math.isfinite(pedal_factor) and abs(pedal_factor) > 1e-6
   pedal_long_allowed = use_pedal and pedal_transform_valid
@@ -130,7 +138,8 @@ def update_preap(cs, can_parsers):
   button_events = cs.engagement.process_buttons(
     cs.cruise_buttons, cs.prev_cruise_buttons, curr_time_ms,
     ret.vEgo, cs.speed_units, use_pedal, pedal_long_allowed,
-    long_control_allowed, real_brake_pressed, cs.di_cruise_state)
+    long_control_allowed, real_brake_pressed, cs.di_cruise_state,
+    vision_acc=vision_acc)
   # Suppress brakePressed so generic brake-disengage path doesn't kill lateral
   ret.brakePressed = False
   ret.buttonEvents = button_events

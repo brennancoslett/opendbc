@@ -9,8 +9,14 @@ Independent of pedal mode: runs every carcontroller tick. The pedal-control
 side and this module communicate exclusively through CarState flags so
 neither has to reach into the other's state.
 """
+import time
+
 from opendbc.car.carlog import carlog
 from opendbc.car.tesla.values import CruiseButtons
+
+
+def _current_time_millis():
+  return int(round(time.time() * 1000))
 
 
 # Phases
@@ -36,6 +42,19 @@ class StockCCSpoofer:
     self.cancel_frame = -1_000_000
     self.prev_di_cc_engaged = False
     self.pcc_event = None
+    # Vision ACC speed-press request; one-shot, consumed at the next TX slot
+    self.requested_button = None
+
+  def request_button(self, button):
+    """Queue a vision-ACC speed press (UP/DN 1ST/2ND) for the next TX slot.
+
+    CANCEL must not come through here — route it via CS.preap_cc_cancel_needed
+    so it gets the cancel-pending machinery and echo filtering.
+    """
+    if button == CruiseButtons.CANCEL:
+      carlog.error("StockCC: CANCEL routed via request_button — dropped; use preap_cc_cancel_needed")
+      return
+    self.requested_button = button
 
   def update(self, CS, frame, tesla_can, can_bus_party):
     can_sends = []
@@ -75,6 +94,21 @@ class StockCCSpoofer:
         sent = self._send(CS, tesla_can, can_bus_party, CruiseButtons.SET_ACCEL)
         if sent is not None:
           can_sends.append(sent)
+    elif self.requested_button is not None and not self.cancel_pending and frame % 10 == 0:
+      # Vision ACC speed press — lowest priority: cancel and engage always win
+      sent = self._send(CS, tesla_can, can_bus_party, self.requested_button)
+      if sent is not None:
+        can_sends.append(sent)
+        # Stamp the FSM so the RX echo of this frame isn't read as a human press
+        engagement = getattr(CS, "engagement", None)
+        if engagement is not None:
+          engagement.preap_last_speed_spoof_ms = _current_time_millis()
+      self.requested_button = None
+
+    # A queued speed press is stale after its slot chance passes with a
+    # cancel/engage in flight — drop it rather than fire it late.
+    if self.cancel_pending or self.cc_engage_phase == _PHASE_ENGAGING:
+      self.requested_button = None
 
     # --- Edge events for teslaCCEngaged / teslaCCDisengaged ---
     di_cc_engaged = getattr(CS, "di_cruise_state", "OFF") == "ENABLED"

@@ -68,6 +68,7 @@ class CarState(CarStateBase):
       self.pedal_interceptor_value = 0.0
       self.pedal_timeout = True
       self.pccEvent = None
+      self.v_cruise_actual_kph = 0.0  # DI stock-CC set speed read-back (vision ACC)
 
   def update_button_enable(self, buttonEvents):
     # Pre-AP engagement is managed entirely by the PreAPEngagement FSM.

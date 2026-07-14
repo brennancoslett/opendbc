@@ -5,10 +5,12 @@ from opendbc.car.lateral import apply_steer_angle_limits_vm
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.tesla.teslacan import TeslaCAN
 from opendbc.car.tesla.teslacan_legacy import TeslaCANRaven
-from opendbc.car.tesla.values import CarControllerParams, CANBUS, LEGACY_CARS, CAR
+from opendbc.car.tesla.values import CarControllerParams, CANBUS, LEGACY_CARS, CAR, CruiseButtons
 from opendbc.car.vehicle_model import VehicleModel
 from opendbc.car.tesla.preap.carcontroller import PreAPLongController, init_preap_can
+from opendbc.car.tesla.preap.nap_conf import nap_conf
 from opendbc.car.tesla.preap.stock_cc_spoofer import StockCCSpoofer
+from opendbc.car.tesla.preap.vision_acc import VisionACCController, LIVE_TX as VISION_ACC_LIVE_TX
 
 
 def get_safety_CP():
@@ -37,6 +39,7 @@ class CarController(CarControllerBase):
       if CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
         self.preap_long = PreAPLongController()
         self.stock_cc = StockCCSpoofer()
+        self.vision_acc = VisionACCController()
         self.tesla_can = init_preap_can(dbc_names, self.packers)
       else:
         self.tesla_can = TeslaCANRaven(self.packers)
@@ -113,6 +116,17 @@ class CarController(CarControllerBase):
     # pedal mode wants to drop a running stock CC — consumed by stock_cc below.
     if self.CP.openpilotLongitudinalControl:
       can_sends.extend(self.preap_long.update(CC, CS, self.frame, self.tesla_can, CANBUS.party))
+
+    # Vision ACC (no pedal): translate the planner's accel request into
+    # stock-CC set-speed button decisions. Phase 1 is a dry run (LIVE_TX
+    # False in vision_acc.py): decisions are logged, never transmitted.
+    if self.CP.openpilotLongitudinalControl and not nap_conf.use_pedal:
+      vacc_button = self.vision_acc.update(CC, CS, self.frame)
+      if vacc_button is not None and VISION_ACC_LIVE_TX:
+        if vacc_button == CruiseButtons.CANCEL:
+          CS.preap_cc_cancel_needed = True
+        else:
+          self.stock_cc.request_button(vacc_button)
 
     # Stock-CC stalk spoofs (CANCEL / SET_ACCEL). Independent of op-long —
     # the engagement FSM publishes its intent through CarState flags and the

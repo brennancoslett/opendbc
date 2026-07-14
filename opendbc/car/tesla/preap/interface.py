@@ -8,6 +8,7 @@ from opendbc.car.tesla.preap.nap_conf import nap_conf
 PREAP_FLAG_ENABLE_PEDAL = 1
 PREAP_FLAG_RADAR_EMULATION = 2
 PREAP_FLAG_RADAR_BEHIND_NOSECONE = 4
+PREAP_FLAG_VISION_ACC = 8
 from opendbc.car.tesla.preap.constants import (
   ACCEL_PREAP_BP, ACCEL_PREAP_PROFILES,
   PEDAL_LONG_K_BP, PEDAL_LONG_KP_V, PEDAL_LONG_KI_V,
@@ -36,10 +37,13 @@ def get_preap_params(ret, fingerprint):
   # Build safety param flags for the standalone Pre-AP safety mode
   flags = 0
   use_pedal = nap_conf.use_pedal
+  # Vision ACC modulates the stock CC set speed via stalk spoof — it is a
+  # no-pedal mode. A physical pedal always takes precedence.
+  vision_acc = nap_conf.vision_acc and not use_pedal
   radar_enabled = nap_conf.radar_enabled
   radar_behind_nosecone = nap_conf.radar_behind_nosecone
-  carlog.info("Pre-AP fingerprint: use_pedal=%s radar_enabled=%s behind_nosecone=%s",
-              use_pedal, radar_enabled, radar_behind_nosecone)
+  carlog.info("Pre-AP fingerprint: use_pedal=%s vision_acc=%s radar_enabled=%s behind_nosecone=%s",
+              use_pedal, vision_acc, radar_enabled, radar_behind_nosecone)
 
   if use_pedal:
     flags |= PREAP_FLAG_ENABLE_PEDAL
@@ -47,18 +51,21 @@ def get_preap_params(ret, fingerprint):
     flags |= PREAP_FLAG_RADAR_EMULATION
   if radar_behind_nosecone:
     flags |= PREAP_FLAG_RADAR_BEHIND_NOSECONE
+  if vision_acc:
+    flags |= PREAP_FLAG_VISION_ACC
 
   ret.safetyConfigs = [
     get_safety_config(structs.CarParams.SafetyModel.teslaPreap, int(flags)),
   ]
   ret.radarUnavailable = not radar_enabled
   ret.steerControlType = structs.CarParams.SteerControlType.angle
-  # Only claim longitudinal control when a Comma Pedal is installed. Without
-  # the pedal NAP can't actuate throttle — stock Tesla CC handles speed via
-  # the stalk-spoof engage/cancel in carcontroller.py, so op-long would just
-  # run a planner whose output is silently discarded.
-  ret.openpilotLongitudinalControl = use_pedal
-  ret.pcmCruise = not use_pedal
+  # Claim longitudinal control when a Comma Pedal is installed, or in vision
+  # ACC mode where the planner's accel request drives stock-CC set-speed
+  # nudges (see preap/vision_acc.py). In plain no-pedal mode, stock Tesla CC
+  # handles speed via the stalk-spoof engage/cancel in carcontroller.py, so
+  # op-long would just run a planner whose output is silently discarded.
+  ret.openpilotLongitudinalControl = use_pedal or vision_acc
+  ret.pcmCruise = not ret.openpilotLongitudinalControl
 
   if use_pedal:
     ret.longitudinalTuning.kpBP = PEDAL_LONG_K_BP
@@ -71,6 +78,11 @@ def get_preap_params(ret, fingerprint):
     except AttributeError:
       pass  # kf not available in all capnp schema versions
     ret.longitudinalActuatorDelay = 0.4
+  elif vision_acc:
+    # Std zero-gain tuning: LongControl passes a_target through as pure
+    # feedforward, which is exactly what vision ACC consumes. The DI takes
+    # on the order of a second to act on a spoofed set-speed step.
+    ret.longitudinalActuatorDelay = 0.8
 
   # Legacy Model S steering and physical params
   ret.steerLimitTimer = 0.4
