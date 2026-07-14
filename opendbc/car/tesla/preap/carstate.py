@@ -4,6 +4,7 @@ import time
 
 from opendbc.can import CANParser
 from opendbc.car import Bus, structs
+from opendbc.car.carlog import carlog
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_THRESHOLD
 from opendbc.car.tesla.preap.nap_params import NAPParamKeys
@@ -83,6 +84,27 @@ def update_preap(cs, can_parsers):
   # modulates this via spoofed stalk presses and needs the read-back)
   di_cruise_set = cp_chassis.vl["DI_state"]["DI_cruiseSet"]
   cs.v_cruise_actual_kph = di_cruise_set * CV.MPH_TO_KPH if cs.speed_units == "MPH" else di_cruise_set
+
+  # While the stock CC is driving, the DI authors DI_pedalPos itself: it carries
+  # the CC's own torque demand (measured mean ~20, min ~14 at cruise) rather than
+  # the driver's foot, so the gasPressed threshold above is unconditionally true.
+  # Only vision ACC is affected: it is the sole mode that claims op-long while a
+  # stock CC is running, and the resulting permanent gasPressedOverride kills
+  # longActive the instant the CC engages (2026-07-14 drive: 2/56489 live frames).
+  # The DI reports a genuine driver press while cruising as OVERRIDE, so use the
+  # cruise state as the override signal in that window.
+  if vision_acc and cs.di_cruise_state in ("ENABLED", "STANDSTILL", "OVERRIDE"):
+    ret.gasPressed = cs.di_cruise_state == "OVERRIDE"
+
+  # OVERRIDE has not yet been observed on this car (the 2026-07-14 drive never
+  # touched the accelerator while cruising), so the assumption above is unproven.
+  # Log DI cruise transitions with the raw pedal signal to confirm that pressing
+  # the accelerator during stock CC really does show up as OVERRIDE.
+  if cs.di_cruise_state != cs.prev_di_cruise_state:
+    carlog.warning("PreAP DI cruise %s -> %s | DI_pedalPos=%.1f gasPressed=%s vision_acc=%s",
+                   cs.prev_di_cruise_state, cs.di_cruise_state,
+                   cp_pt.vl["DI_torque1"]["DI_pedalPos"], ret.gasPressed, vision_acc)
+    cs.prev_di_cruise_state = cs.di_cruise_state
 
   if cs.enableLongControl and (use_pedal or vision_acc):
     # Software-owned set speed: pedal target, or the vision ACC ceiling.
