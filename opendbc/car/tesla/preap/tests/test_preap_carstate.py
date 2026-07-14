@@ -83,7 +83,7 @@ class TestPreAPDIStateDecode(unittest.TestCase):
       packer = CANPacker("tesla_preap")
       msgs = [
         packer.make_can_msg("DI_state", CANBUS.party,
-                            {"DI_cruiseState": di_cruise_state, "DI_speedUnits": 1,
+                            {"DI_cruiseState": di_cruise_state, "DI_speedUnits": 0,  # 0 = MPH (1 = KPH)
                              "DI_cruiseSet": di_cruise_set,
                              "DI_digitalSpeed": di_digital_speed}),
         packer.make_can_msg("DI_torque1", CANBUS.party, {"DI_pedalPos": di_pedal_pos}),
