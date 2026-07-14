@@ -43,19 +43,31 @@ class TestPreAPCarStateUpdate(unittest.TestCase):
       self.assertTrue(hasattr(CS, field), f"CarState schema missing {field}")
 
 
-class TestVisionACCGasPressed(unittest.TestCase):
-  """gasPressed must not be forged by the stock CC's own torque demand.
+class TestPreAPDIStateDecode(unittest.TestCase):
+  """Pin the pre-AP DI_state field layout and the pedal semantics, both
+  established by CAN measurement on the 2026-07-14 drives.
 
-  While the Tesla DI drives the car under stock cruise, it authors DI_pedalPos
-  itself — it carried a mean of ~20 (threshold is 2) across every ENABLED frame
-  of the 2026-07-14 drive. Vision ACC is the only mode that claims op-long while
-  a stock CC runs, so that signal read as a permanent driver gas override and
-  dropped longActive the instant the CC engaged: vision ACC could never act
-  (2 eligible frames out of 56489). Pedal mode is unaffected — it reads the
-  interceptor — and plain no-pedal mode never claims op-long.
+  Pre-AP firmware swaps two DI_state fields relative to the AP-era DBC this
+  file was inherited from: bits 32-40 carry the displayed vehicle speed (they
+  tracked vEgo 1:1 at all times, ENABLED included) and bits 48-55 the cruise
+  set speed (held 41 while the car converged to and held 40.3 mph for 30 s;
+  stepped 41->36 on a stalk-down and the car settled at 36). Reading the set
+  speed from bits 32-40 made vision ACC see roughly half the true set speed,
+  so it computed a large positive offset and demanded UP_2ND every 500 ms —
+  under LIVE_TX that would ratchet the real set speed to the TX ceiling.
+  tesla_preap.dbc now names the fields per the pre-AP layout.
+
+  DI_pedalPos is the driver's accelerator, full stop — it maps linearly to
+  DI_torqueDriver (33% -> +135 Nm, 0% -> -114 Nm regen) and lifting it decays
+  speed toward the set speed even while ENABLED. It must stay wired to
+  gasPressed in every mode: during stock-CC operation a pedal press is a
+  genuine driver override (the DI never reports an OVERRIDE cruise state on
+  this car — zero occurrences across both drives), and masking it would hide
+  the driver's takeover from openpilot.
   """
 
-  def _run(self, *, di_cruise_state, di_pedal_pos, vision_acc):
+  def _cs(self, *, di_cruise_state, di_pedal_pos, di_cruise_set, di_digital_speed=0,
+          vision_acc=True):
     from unittest.mock import PropertyMock, patch
     from opendbc.can import CANPacker
     from opendbc.car.car_helpers import interfaces
@@ -68,38 +80,39 @@ class TestVisionACCGasPressed(unittest.TestCase):
       CP = CarInterface.get_params("TESLA_MODEL_S_PREAP", {i: {} for i in range(8)}, [],
                                    alpha_long=False, is_release=False, docs=False)
       CI = CarInterface(CP)
-
       packer = CANPacker("tesla_preap")
       msgs = [
         packer.make_can_msg("DI_state", CANBUS.party,
-                            {"DI_cruiseState": di_cruise_state, "DI_speedUnits": 1}),
+                            {"DI_cruiseState": di_cruise_state, "DI_speedUnits": 1,
+                             "DI_cruiseSet": di_cruise_set,
+                             "DI_digitalSpeed": di_digital_speed}),
         packer.make_can_msg("DI_torque1", CANBUS.party, {"DI_pedalPos": di_pedal_pos}),
       ]
       CS = None
       for _ in range(5):
         CS = CI.update([(0, msgs)])
-      return CS
+      return CI.CS, CS
 
-  def test_stock_cc_torque_demand_is_not_a_gas_press(self):
-    # DI_cruiseState=2 (ENABLED) with the DI commanding ~20% pedal: not the driver
-    CS = self._run(di_cruise_state=2, di_pedal_pos=20.0, vision_acc=True)
-    self.assertFalse(CS.gasPressed,
-                     "stock CC's own DI_pedalPos must not register as a driver gas press")
+  def test_set_speed_reads_bits_48_not_vehicle_speed(self):
+    # CC set at 40 mph while the (overriding) car does 55: the readback must be 40
+    cs, _ = self._cs(di_cruise_state=2, di_pedal_pos=0.0,
+                     di_cruise_set=40, di_digital_speed=55)
+    self.assertAlmostEqual(cs.v_cruise_actual_kph, 40 * 1.609344, places=1)
 
-  def test_real_press_while_cruising_is_an_override(self):
-    # DI reports a genuine driver press during cruise as OVERRIDE (4)
-    CS = self._run(di_cruise_state=4, di_pedal_pos=40.0, vision_acc=True)
-    self.assertTrue(CS.gasPressed, "DI OVERRIDE must surface as a driver gas press")
+  def test_plain_no_pedal_cruise_speed_reads_same_bits(self):
+    # the pre-existing stock-CC display path must still see the true set speed
+    _, CS = self._cs(di_cruise_state=2, di_pedal_pos=0.0,
+                     di_cruise_set=40, di_digital_speed=55, vision_acc=False)
+    self.assertAlmostEqual(CS.cruiseState.speed, 40 * 0.44704, places=2)
 
-  def test_gas_press_still_detected_when_cruise_not_running(self):
-    # STANDBY (1): the DI is not driving, so DI_pedalPos is the driver's foot again
-    CS = self._run(di_cruise_state=1, di_pedal_pos=20.0, vision_acc=True)
-    self.assertTrue(CS.gasPressed, "with cruise in STANDBY, DI_pedalPos is the driver")
+  def test_driver_press_during_stock_cc_is_a_gas_press(self):
+    # accelerator override while ENABLED is real driver input — never mask it
+    _, CS = self._cs(di_cruise_state=2, di_pedal_pos=20.0, di_cruise_set=40)
+    self.assertTrue(CS.gasPressed, "driver accelerator press during stock CC must not be masked")
 
-  def test_untouched_when_vision_acc_off(self):
-    # plain no-pedal mode keeps the raw DI_pedalPos behaviour
-    CS = self._run(di_cruise_state=2, di_pedal_pos=20.0, vision_acc=False)
-    self.assertTrue(CS.gasPressed)
+  def test_foot_off_during_stock_cc_is_not_a_gas_press(self):
+    _, CS = self._cs(di_cruise_state=2, di_pedal_pos=0.0, di_cruise_set=40)
+    self.assertFalse(CS.gasPressed)
 
 
 if __name__ == "__main__":

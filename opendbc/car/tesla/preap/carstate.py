@@ -81,25 +81,19 @@ def update_preap(cs, can_parsers):
     cs.speed_units = speed_units
 
   # Actual stock-CC set speed from the DI, in display units (vision ACC
-  # modulates this via spoofed stalk presses and needs the read-back)
+  # modulates this via spoofed stalk presses and needs the read-back).
+  # Pre-AP firmware swaps two DI_state fields relative to the AP-era DBC:
+  # bits 32-40 carry the displayed vehicle speed and bits 48-55 the cruise set
+  # speed (both display units, scale 1). Established on the 2026-07-14 drives:
+  # bits 48-55 held 41 while the car converged to and held 40.3 mph for 30 s,
+  # stepped 41->36 on a stalk-down and the car settled at 36; bits 32-40
+  # tracked vEgo 1:1 throughout, including while ENABLED. tesla_preap.dbc
+  # names reflect the pre-AP layout, so this read is bits 48-55.
   di_cruise_set = cp_chassis.vl["DI_state"]["DI_cruiseSet"]
   cs.v_cruise_actual_kph = di_cruise_set * CV.MPH_TO_KPH if cs.speed_units == "MPH" else di_cruise_set
 
-  # While the stock CC is driving, the DI authors DI_pedalPos itself: it carries
-  # the CC's own torque demand (measured mean ~20, min ~14 at cruise) rather than
-  # the driver's foot, so the gasPressed threshold above is unconditionally true.
-  # Only vision ACC is affected: it is the sole mode that claims op-long while a
-  # stock CC is running, and the resulting permanent gasPressedOverride kills
-  # longActive the instant the CC engages (2026-07-14 drive: 2/56489 live frames).
-  # The DI reports a genuine driver press while cruising as OVERRIDE, so use the
-  # cruise state as the override signal in that window.
-  if vision_acc and cs.di_cruise_state in ("ENABLED", "STANDSTILL", "OVERRIDE"):
-    ret.gasPressed = cs.di_cruise_state == "OVERRIDE"
-
-  # OVERRIDE has not yet been observed on this car (the 2026-07-14 drive never
-  # touched the accelerator while cruising), so the assumption above is unproven.
-  # Log DI cruise transitions with the raw pedal signal to confirm that pressing
-  # the accelerator during stock CC really does show up as OVERRIDE.
+  # DI cruise transitions, with the raw pedal signal — cheap, and the record
+  # that settled the pedal semantics and the DI_state field swap above.
   if cs.di_cruise_state != cs.prev_di_cruise_state:
     carlog.warning("PreAP DI cruise %s -> %s | DI_pedalPos=%.1f gasPressed=%s vision_acc=%s",
                    cs.prev_di_cruise_state, cs.di_cruise_state,
@@ -111,10 +105,12 @@ def update_preap(cs, can_parsers):
     # card.py's Pre-AP software-cruise path reads this back as vCruise.
     ret.cruiseState.speed = cs.pedal_speed_kph * CV.KPH_TO_MS
   else:
+    # Same bits this always read (48-55): the stock-CC set speed. Only the
+    # signal's DBC name changed when the pre-AP field swap was corrected.
     if speed_units == "KPH":
-      ret.cruiseState.speed = max(cp_chassis.vl["DI_state"]["DI_digitalSpeed"] * CV.KPH_TO_MS, 1e-3)
+      ret.cruiseState.speed = max(di_cruise_set * CV.KPH_TO_MS, 1e-3)
     elif speed_units == "MPH":
-      ret.cruiseState.speed = max(cp_chassis.vl["DI_state"]["DI_digitalSpeed"] * CV.MPH_TO_MS, 1e-3)
+      ret.cruiseState.speed = max(di_cruise_set * CV.MPH_TO_MS, 1e-3)
 
   ret.cruiseState.standstill = False
   ret.standstill = cruise_state == "STANDSTILL"
