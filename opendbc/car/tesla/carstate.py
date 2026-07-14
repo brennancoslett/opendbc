@@ -71,6 +71,8 @@ class CarState(CarStateBase):
       self.v_cruise_actual_kph = 0.0  # DI stock-CC set speed read-back (vision ACC)
       self.di_cruise_state = "OFF"
       self.prev_di_cruise_state = "OFF"
+      self.prev_di_cruise_set_raw = 0
+      self.last_cruise_set_change_ms = 0
 
   def update_button_enable(self, buttonEvents):
     # Pre-AP engagement is managed entirely by the PreAPEngagement FSM.
