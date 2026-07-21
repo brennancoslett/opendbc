@@ -144,20 +144,22 @@ class TestControllerGating:
     assert self.ctrl.update(make_cc(accel=-1.0), cs, frame=0) is None
 
   def test_human_action_holdoff(self):
+    # accel=-0.5 is a DN_1ST step, above the sustained-decel CANCEL threshold,
+    # so this exercises the holdoff→press path (not the cancel path).
     cs = make_cs(cc_set_kph=108.0, last_human_ms=self.t_ms - HUMAN_ACTION_HOLDOFF_MS + 100)
-    assert self.ctrl.update(make_cc(accel=-1.0), cs, frame=0) is None
+    assert self.ctrl.update(make_cc(accel=-0.5), cs, frame=0) is None
     # Holdoff expired → decision resumes
     self.t_ms += 200
-    assert self.ctrl.update(make_cc(accel=-1.0), cs, frame=1) is not None
+    assert self.ctrl.update(make_cc(accel=-0.5), cs, frame=1) is not None
 
   def test_automated_press_spacing(self):
     cs = make_cs(cc_set_kph=108.0)
-    assert self.ctrl.update(make_cc(accel=-1.0), cs, frame=0) is not None
+    assert self.ctrl.update(make_cc(accel=-0.5), cs, frame=0) is not None
     # Immediately after: spaced out
     self.t_ms += 100
-    assert self.ctrl.update(make_cc(accel=-1.0), cs, frame=1) is None
+    assert self.ctrl.update(make_cc(accel=-0.5), cs, frame=1) is None
     self.t_ms += AUTO_ACTION_SPACING_MS
-    assert self.ctrl.update(make_cc(accel=-1.0), cs, frame=2) is not None
+    assert self.ctrl.update(make_cc(accel=-0.5), cs, frame=2) is not None
 
 
 class TestHardBrakingBypass:

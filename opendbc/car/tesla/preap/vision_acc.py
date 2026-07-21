@@ -83,12 +83,18 @@ ACCEL_PROJECTION_S = 1.5
 # Don't fight the driver: no automated press within this window of a human
 # stalk action (tesla-unity used 3s)
 HUMAN_ACTION_HOLDOFF_MS = 3000
-# Spacing between automated presses — the DI needs time to act on each step
-# (tesla-unity value). Drive log 00000009--2dd6a2315a showed presses landing
-# at a rigid ~500ms cadence through every accel/decel ramp (e.g. 7 straight
-# DN_1ST steps at 1784069147-149), reported back as "stuttery"
-# acceleration/deceleration — tune this if 400ms doesn't help.
-AUTO_ACTION_SPACING_MS = 400
+# Spacing between automated presses — the DI needs time to act on each step.
+# Bumped 400 -> 600 for smoothness (drive 00000005--165bf7823d accel bookmark).
+# Each 1-mph UP step makes the DI surge to ~+1.0 m/s^2 then decay to ~+0.35 over
+# ~500 ms. At 400 ms we pressed ~2.5x/s and re-surged before the last one
+# settled, holding ccSet ~1-1.4 kph above vEgo continuously even though the
+# planner only wanted ~+0.3 m/s^2 — i.e. we over-pressed for the demand and the
+# DI kept lurching. 600 ms (~1.7x/s) lets each surge settle and keeps ccSet
+# closer to vEgo, so the accel is gentler and less pulsed. Note a floor on
+# smoothness: even during a 1.1 s no-press gap the DI's own throttle ripples
+# ~+-0.5 m/s^2, which stalk spoofing cannot remove. Iterate from the
+# VisionACC.tlm cadence if 600 ms still feels jumpy.
+AUTO_ACTION_SPACING_MS = 600
 
 # Below this requested accel, stepped set-speed nudges can't track the
 # request in time: cc_set_kph gets dragged down by each auto-press, which
