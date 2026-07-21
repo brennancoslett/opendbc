@@ -152,6 +152,14 @@ class TestControllerGating:
     self.t_ms += 200
     assert self.ctrl.update(make_cc(accel=-0.5), cs, frame=1) is not None
 
+  def test_reaches_ceiling_on_mild_accel(self):
+    # Near the max: set speed ~2 mph below the ceiling, planner wants a mild
+    # positive accel. The projected target alone undershoots (offset < 1 step),
+    # so without the ceiling floor it would stall — must produce an UP press.
+    cs = make_cs(cc_set_kph=66.0, ceiling_kph=69.2, v_ego=18.1, speed_units="MPH")
+    btn = self.ctrl.update(make_cc(accel=0.22), cs, frame=0)
+    assert btn in (CruiseButtons.RES_ACCEL, CruiseButtons.RES_ACCEL_2ND)
+
   def test_automated_press_spacing(self):
     cs = make_cs(cc_set_kph=108.0)
     assert self.ctrl.update(make_cc(accel=-0.5), cs, frame=0) is not None

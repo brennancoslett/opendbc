@@ -250,7 +250,22 @@ class VisionACCController:
 
     cc_set_kph = getattr(CS, "v_cruise_actual_kph", 0.0)
     ceiling_kph = getattr(CS, "pedal_speed_kph", 0.0)
-    desired_kph = CS.out.vEgo * CV.MS_TO_KPH + float(CC.actuators.accel) * ACCEL_PROJECTION_S * CV.MS_TO_KPH
+    a_req = float(CC.actuators.accel)
+    desired_kph = CS.out.vEgo * CV.MS_TO_KPH + a_req * ACCEL_PROJECTION_S * CV.MS_TO_KPH
+    # Reach the ceiling. The projected target undershoots near the max: as the
+    # car approaches it, aReq -> 0 so desired -> vEgo, leaving the offset below
+    # one press step and the set speed stalling ~1-2 mph under the driver's max
+    # (drive 093aeba9a: ccSet 66.0 held while ceil 69.2, aReq +0.22, off +0.3).
+    # When the planner isn't braking, floor the target at one step above the
+    # current set so it keeps climbing to the ceiling (capped there); the big
+    # accel ramp is unaffected because the projected target dominates then.
+    if a_req >= 0.0:
+      # One step above the current set (+ a hair to clear calc_button's
+      # offset >= half boundary), so it climbs at the gentle half-step rate to
+      # the ceiling rather than jumping (targeting the ceiling directly would
+      # give a full-step offset and 5 mph lurches when far below it).
+      half_kph, _ = get_cc_step_kph(CS.speed_units == "MPH")
+      desired_kph = max(desired_kph, cc_set_kph + half_kph + 0.05)
     self._desired_kph = min(desired_kph, ceiling_kph)
     self._offset_kph = self._desired_kph - cc_set_kph
     return self.calc_button(
