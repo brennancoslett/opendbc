@@ -41,7 +41,7 @@ class NAPParamKeys:
 DEFAULTS = {
   NAPParamKeys.ADAPTIVE_ACCEL: True,
   NAPParamKeys.PEDAL_ENABLED: False,
-  NAPParamKeys.VISION_ACC: False,
+  NAPParamKeys.VISION_ACC: True,
   NAPParamKeys.VISION_ACC_LIVE_TX: False,
   NAPParamKeys.FOLLOW_DISTANCE: 4,
   NAPParamKeys.PEDAL_PROFILE: 4,

@@ -22,7 +22,7 @@ CONFIG_FILE = "/data/nap_params.json"
 DEFAULT_CONFIG = {
   'double_pull_window_ms': 400,
   'use_pedal': False,
-  'vision_acc': False,
+  'vision_acc': True,
   'vision_acc_live_tx': False,
   'pedal_calibrated': False,
   'accel_profile': 'Chill',
