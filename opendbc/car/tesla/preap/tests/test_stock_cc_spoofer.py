@@ -91,6 +91,25 @@ class TestCancelPath:
     sends_total = sum(len(s) for _, s in history)
     assert sends_total == 0, "No msg_stw → no TX, no crash"
 
+  def test_continuous_cancel_request_still_fires(self):
+    # Vision ACC asserts preap_cc_cancel_needed EVERY frame through a sustained
+    # decel CANCEL. cancel_frame must latch on the rising edge, not re-stamp each
+    # frame — otherwise (frame - cancel_frame) stays 0, cancel_ready never trips,
+    # and the CANCEL is never transmitted (regression: drive
+    # 00000003--a061fe2143, ~1.8 s of CANCEL commanded, DI never dropped).
+    s = StockCCSpoofer()
+    can = make_can()
+    cs = make_cs(cancel_needed=True, di_cruise_state="ENABLED")
+    fired = []
+    for frame in range(0, 40):
+      cs.preap_cc_cancel_needed = True  # re-asserted every frame
+      if s.update(cs, frame, can, CAN_BUS):
+        fired.append(frame)
+    assert fired, "Continuous cancel request must still transmit CANCEL"
+    assert CANCEL_DELAY_FRAMES <= fired[0] < 20, "CANCEL must fire promptly, not defer forever"
+    can.create_action_request.assert_called_with(
+      CruiseButtons.CANCEL, CAN_BUS, 4, cs.msg_stw_actn_req)
+
 
 # ---- Engage path ----
 

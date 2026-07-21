@@ -78,8 +78,20 @@ class StockCCSpoofer:
 
     # --- Bridge engagement-FSM intent to internal state ---
     if getattr(CS, "preap_cc_cancel_needed", False):
+      # Latch cancel_frame on the RISING edge only. Vision ACC asserts
+      # preap_cc_cancel_needed every frame through a sustained decel CANCEL;
+      # re-stamping cancel_frame each frame kept (frame - cancel_frame) at 0, so
+      # cancel_ready (>= CANCEL_DELAY_FRAMES) never became true and the CANCEL
+      # was never sent — drive 00000003--a061fe2143 (f5540+) commanded CANCEL
+      # for ~1.8 s with the DI still ENABLED until the driver intervened. The
+      # old one-shot engagement-FSM cancel set the flag for a single frame and
+      # so never hit this. Latching from the first request keeps the ~100 ms
+      # pedal-handoff delay while still firing; after each send cancel_pending
+      # clears and a still-asserted request re-arms, re-sending every ~100 ms
+      # until the DI drops.
+      if not self.cancel_pending:
+        self.cancel_frame = frame
       self.cancel_pending = True
-      self.cancel_frame = frame
       # Cancel beats engage: abort any in-flight ENGAGING.
       self.cc_engage_phase = _PHASE_IDLE
       CS.preap_cc_cancel_needed = False
