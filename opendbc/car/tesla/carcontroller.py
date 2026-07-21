@@ -127,6 +127,11 @@ class CarController(CarControllerBase):
       if vacc_button is not None and nap_conf.vision_acc_live_tx:
         if vacc_button == CruiseButtons.CANCEL:
           CS.preap_cc_cancel_needed = True
+          if self.vision_acc.brake_handoff_edge:
+            # Distinct "ACC can't slow — you brake" chime at the decision moment
+            # (~200 ms before the DI actually drops). Set here, not in stock_cc,
+            # so it only fires when the cancel is really transmitted (live_tx).
+            CS.pccEvent = "visionAccBrakeHandoff"
         else:
           self.stock_cc.request_button(vacc_button)
 

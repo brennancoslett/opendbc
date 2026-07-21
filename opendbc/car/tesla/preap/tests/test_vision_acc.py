@@ -255,6 +255,42 @@ class TestSustainedDecelCancel:
       self.t_ms += 300
 
 
+class TestBrakeHandoffChime:
+  """brake_handoff_edge one-shots on the first frame of a braking CANCEL —
+  drives the distinct 'you take the brakes' chime.
+  """
+
+  def setup_method(self):
+    self.ctrl = VisionACCController()
+    self.t_ms = 1_000_000
+    vacc._current_time_millis = lambda: self.t_ms
+
+  def teardown_method(self):
+    import time
+    vacc._current_time_millis = lambda: int(round(time.time() * 1000))
+
+  def test_hard_brake_raises_edge(self):
+    cs = make_cs(cc_set_kph=108.0)
+    assert self.ctrl.update(make_cc(accel=-1.5), cs, frame=0) == CruiseButtons.CANCEL
+    assert self.ctrl.brake_handoff_edge is True
+
+  def test_unmet_decel_raises_edge_once(self):
+    cs = make_cs(cc_set_kph=108.0)  # aEgo=0 default → unmet
+    self.ctrl.update(make_cc(accel=-1.0), cs, frame=0)  # arm, no cancel yet
+    assert self.ctrl.brake_handoff_edge is False
+    self.t_ms += int(DECEL_CANCEL_SUSTAIN_S * 1000) + 20
+    assert self.ctrl.update(make_cc(accel=-1.0), cs, frame=1) == CruiseButtons.CANCEL
+    assert self.ctrl.brake_handoff_edge is True   # rising edge
+    # still cancelling → no repeat edge
+    self.ctrl.update(make_cc(accel=-1.0), cs, frame=2)
+    assert self.ctrl.brake_handoff_edge is False
+
+  def test_no_edge_when_not_cancelling(self):
+    cs = make_cs(cc_set_kph=108.0, a_ego=-1.0)  # decel tracked → no cancel
+    self.ctrl.update(make_cc(accel=-1.0), cs, frame=0)
+    assert self.ctrl.brake_handoff_edge is False
+
+
 def pull_main(eng, t_ms, *, vision_acc=True, v_ego=25.0, di_state="STANDBY"):
   """One MAIN pull (press + release) at t_ms."""
   common = dict(v_ego=v_ego, speed_units="KPH", use_pedal=False,

@@ -162,6 +162,10 @@ class VisionACCController:
     self._offset_kph = None
     # timestamp (ms) the current sustained-decel demand began; 0 = not pending
     self._decel_demand_start_ms = 0
+    # one-shot: True on the frame a braking-driven CANCEL first fires, so the
+    # carcontroller can raise the distinct "you brake" handoff chime once.
+    self._braking_cancel_prev = False
+    self.brake_handoff_edge = False
     carlog.info(
       "VisionACC config: proj=%.2f spacing=%dms holdoff=%dms cancel_thr=%+.2f min_cruise=%.1fmph",
       ACCEL_PROJECTION_S, AUTO_ACTION_SPACING_MS, HUMAN_ACTION_HOLDOFF_MS,
@@ -170,6 +174,13 @@ class VisionACCController:
   def update(self, CC, CS, frame):
     """Return the CruiseButtons value to spoof this frame, or None."""
     button = self._decide(CC, CS)
+    # Rising edge of a braking-driven CANCEL (hard brake or unmet decel) —
+    # drives the distinct "vision ACC is handing braking to you" chime, once
+    # per event. Coast-style CANCELs (below min cruise, way-over) are excluded.
+    braking_cancel = button == CruiseButtons.CANCEL and \
+        self._reason in ("hard_brake_cancel", "sustained_decel_cancel")
+    self.brake_handoff_edge = braking_cancel and not self._braking_cancel_prev
+    self._braking_cancel_prev = braking_cancel
     self._log_decision(button, CC, CS)
     self._log_telemetry(button, CC, CS, frame)
     if button is not None:
