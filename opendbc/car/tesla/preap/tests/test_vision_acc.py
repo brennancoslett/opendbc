@@ -19,6 +19,7 @@ from opendbc.car.tesla.preap.engagement import PreAPEngagement, SPOOF_ECHO_WINDO
 from opendbc.car.tesla.preap.stock_cc_spoofer import StockCCSpoofer
 from opendbc.car.tesla.preap.vision_acc import (
   VisionACCController, MIN_CRUISE_SPEED_MS, HUMAN_ACTION_HOLDOFF_MS, AUTO_ACTION_SPACING_MS,
+  DECEL_CANCEL_THRESHOLD, DECEL_CANCEL_SUSTAIN_S,
 )
 from opendbc.car.tesla.values import CruiseButtons
 
@@ -197,6 +198,51 @@ class TestHardBrakingBypass:
     cs = make_cs(cc_set_kph=108.0)
     btn = self.ctrl.update(make_cc(accel=-1.29), cs, frame=0)
     assert btn != CruiseButtons.CANCEL
+
+
+class TestSustainedDecelCancel:
+  """Moderate decel (above the hard-brake floor) sustained past the window
+  drops CC to regen coast — the stepped presses can't stop a slowing lead.
+  """
+
+  def setup_method(self):
+    self.ctrl = VisionACCController()
+    self.t_ms = 1_000_000
+    vacc._current_time_millis = lambda: self.t_ms
+
+  def teardown_method(self):
+    import time
+    vacc._current_time_millis = lambda: int(round(time.time() * 1000))
+
+  def test_sustained_decel_cancels(self):
+    cs = make_cs(cc_set_kph=108.0)
+    # First frame arms the sustain timer but does not cancel yet (still steps)
+    assert self.ctrl.update(make_cc(accel=-0.8), cs, frame=0) != CruiseButtons.CANCEL
+    # Same demand past the sustain window → CANCEL to regen coast
+    self.t_ms += int(DECEL_CANCEL_SUSTAIN_S * 1000) + 20
+    assert self.ctrl.update(make_cc(accel=-0.8), cs, frame=1) == CruiseButtons.CANCEL
+
+  def test_brief_decel_dip_does_not_cancel(self):
+    cs = make_cs(cc_set_kph=108.0)
+    self.ctrl.update(make_cc(accel=-0.8), cs, frame=0)  # arm timer
+    self.t_ms += int(DECEL_CANCEL_SUSTAIN_S * 1000) // 2  # well under the window
+    assert self.ctrl.update(make_cc(accel=-0.8), cs, frame=1) != CruiseButtons.CANCEL
+
+  def test_recovery_resets_sustain(self):
+    cs = make_cs(cc_set_kph=108.0)
+    self.ctrl.update(make_cc(accel=-0.8), cs, frame=0)  # arm timer
+    self.t_ms += int(DECEL_CANCEL_SUSTAIN_S * 1000) - 100
+    self.ctrl.update(make_cc(accel=-0.2), cs, frame=1)  # demand eases → timer resets
+    self.t_ms += 300
+    # New demand is only 300 ms old → not yet cancelling
+    assert self.ctrl.update(make_cc(accel=-0.8), cs, frame=2) != CruiseButtons.CANCEL
+
+  def test_mild_decel_never_cancels(self):
+    cs = make_cs(cc_set_kph=108.0)
+    # Demand above (less negative than) the threshold never arms the timer
+    for i in range(6):
+      assert self.ctrl.update(make_cc(accel=DECEL_CANCEL_THRESHOLD + 0.1), cs, frame=i) != CruiseButtons.CANCEL
+      self.t_ms += 300
 
 
 def pull_main(eng, t_ms, *, vision_acc=True, v_ego=25.0, di_state="STANDBY"):

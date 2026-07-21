@@ -99,12 +99,29 @@ AUTO_ACTION_SPACING_MS = 400
 # entirely and drop CC now — the driver is the brakes.
 ACCEL_CANCEL_THRESHOLD = -1.3
 
+# Sustained-moderate-decel CANCEL. Above (less negative than) the hard-brake
+# floor, the stepped set-speed presses barely decelerate: the DI's regen
+# response to a small set-speed gap is weak. Drive 00000001--05edcaba20 (a lead
+# coming to a stop) showed the planner ramp from -0.19 to -1.30 m/s^2 over ~12 s
+# while the car shed only ~-0.2 m/s^2 — 1-mph DN_1ST steps the whole way — and
+# CANCEL didn't fire until -1.30 (~12 s in). Coasting regen right after that
+# CANCEL measured -1.6 m/s^2, ~8x the stepped decel. So when the planner asks
+# for more than mild decel for a sustained window, drop CC now: strong regen +
+# an early "driver takes the brakes" handoff, instead of dribbling ineffective
+# steps down to the hard-brake floor. The threshold sits below the p10 of
+# normal-cruise planner accel (~-0.32 on this drive), so it targets genuine
+# slowdowns; the sustain filters brief traffic dips. Both tunable from a
+# re-drive's VisionACC.tlm — watch reason=sustained_decel_cancel frequency
+# against how the stop actually felt.
+DECEL_CANCEL_THRESHOLD = -0.6  # m/s^2
+DECEL_CANCEL_SUSTAIN_S = 0.5   # s
+
 # A/B telemetry cadence at the 100 Hz carcontroller clock.
 TLM_PERIOD_IN_FRAMES = 20    # 5 Hz while modulating (fine enough for accel dynamics)
 TLM_PERIOD_OUT_FRAMES = 100  # 1 Hz otherwise, so non-engagement stays visible cheaply
 
 # reason values that count as "vision ACC is operating"
-_ACTIVE_REASONS = ("active", "hard_brake_cancel", "human_holdoff", "auto_spacing")
+_ACTIVE_REASONS = ("active", "hard_brake_cancel", "sustained_decel_cancel", "human_holdoff", "auto_spacing")
 
 
 def _current_time_millis():
@@ -131,6 +148,8 @@ class VisionACCController:
     self._reason = "init"
     self._desired_kph = None
     self._offset_kph = None
+    # timestamp (ms) the current sustained-decel demand began; 0 = not pending
+    self._decel_demand_start_ms = 0
     carlog.info(
       "VisionACC config: proj=%.2f spacing=%dms holdoff=%dms cancel_thr=%+.2f min_cruise=%.1fmph",
       ACCEL_PROJECTION_S, AUTO_ACTION_SPACING_MS, HUMAN_ACTION_HOLDOFF_MS,
@@ -153,29 +172,47 @@ class VisionACCController:
     # Engagement FSM must be in long mode (double-pull), openpilot long active
     if not (getattr(CS, "cruiseEnabled", False) and getattr(CS, "enableLongControl", False)):
       self._reason = "not_op_long"
+      self._decel_demand_start_ms = 0
       return None
     if not CC.longActive:
       self._reason = "not_long_active"
+      self._decel_demand_start_ms = 0
       return None
     # Driver on the accelerator: the DI holds CC through it; stay out
     if CS.out.gasPressed:
       self._reason = "gas_pressed"
+      self._decel_demand_start_ms = 0
       return None
     # Only modulate a running stock CC — engaging it is StockCCSpoofer's job,
     # and after a CANCEL the driver must double-pull to rearm (no autoresume)
     di_state = getattr(CS, "di_cruise_state", "OFF")
     if di_state != "ENABLED":
       self._reason = "di_" + str(di_state).lower()
+      self._decel_demand_start_ms = 0
       return None
 
-    # Hard braking ahead: bypass the holdoff/spacing gates below (this is a
-    # safety cutoff, not a set-speed nudge) and skip calc_button()'s
-    # offset-based CANCEL path, which self-corrects too fast to ever trigger.
+    now = _current_time_millis()
+
+    # Hard braking ahead: instant CANCEL (safety cutoff), bypass every gate and
+    # skip calc_button()'s offset-based CANCEL path, which self-corrects too
+    # fast to ever trigger.
     if CC.actuators.accel < ACCEL_CANCEL_THRESHOLD:
       self._reason = "hard_brake_cancel"
+      self._decel_demand_start_ms = 0
       return CruiseButtons.CANCEL
 
-    now = _current_time_millis()
+    # Sustained moderate decel: hand off to regen coast early instead of
+    # dribbling ineffective set-speed steps (see DECEL_CANCEL_THRESHOLD above).
+    # Bypasses the holdoff/spacing gates below — a slowdown shouldn't wait.
+    if CC.actuators.accel < DECEL_CANCEL_THRESHOLD:
+      if self._decel_demand_start_ms == 0:
+        self._decel_demand_start_ms = now
+      elif now - self._decel_demand_start_ms >= DECEL_CANCEL_SUSTAIN_S * 1000:
+        self._reason = "sustained_decel_cancel"
+        return CruiseButtons.CANCEL
+    else:
+      self._decel_demand_start_ms = 0
+
     engagement = getattr(CS, "engagement", None)
     last_human_ms = getattr(engagement, "last_stalk_non_cancel_ms", -10000) if engagement else -10000
     if now - last_human_ms < HUMAN_ACTION_HOLDOFF_MS:
