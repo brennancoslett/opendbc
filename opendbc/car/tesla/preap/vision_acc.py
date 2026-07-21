@@ -105,32 +105,28 @@ AUTO_ACTION_SPACING_MS = 600
 # entirely and drop CC now — the driver is the brakes.
 ACCEL_CANCEL_THRESHOLD = -1.3
 
-# Sustained-moderate-decel CANCEL. Above (less negative than) the hard-brake
-# floor, the stepped set-speed presses barely decelerate: the DI's regen
-# response to a small set-speed gap is weak. Drive 00000001--05edcaba20 (a lead
-# coming to a stop) showed the planner ramp from -0.19 to -1.30 m/s^2 over ~12 s
-# while the car shed only ~-0.2 m/s^2 — 1-mph DN_1ST steps the whole way — and
-# CANCEL didn't fire until -1.30 (~12 s in). Coasting regen right after that
-# CANCEL measured -1.6 m/s^2, ~8x the stepped decel. So when the planner asks
-# for more than mild decel for a sustained window, drop CC now: strong regen +
-# an early "driver takes the brakes" handoff, instead of dribbling ineffective
-# steps down to the hard-brake floor. The threshold sits below the p10 of
-# normal-cruise planner accel (~-0.32 on this drive), so it targets genuine
-# slowdowns; the sustain filters brief traffic dips. Both tunable from a
-# re-drive's VisionACC.tlm — watch reason=sustained_decel_cancel frequency
-# against how the stop actually felt.
-DECEL_CANCEL_THRESHOLD = -0.9  # m/s^2
-DECEL_CANCEL_SUSTAIN_S = 0.2   # s
-# Tuning history (drive 00000006--053e173cb1, near-miss into a stopped car):
-# was -0.6 / 0.5 s. Two problems that pull in opposite directions, reconciled
-# here. (1) -0.6 canceled for merely-moderate slowdowns, dropping out of ACC
-# where stepped decreases would have been smoother (the "jumpy moderate decel"
-# note) — raised to -0.9 so only genuinely hard decel (a real stop) cancels and
-# -0.6..-0.9 keeps stepping. (2) The 0.5 s sustain delayed the hand-off on a
-# real stop — the car held ~44 mph for ~0.9 s while the planner already wanted
-# to stop — shortened to 0.2 s so a hard decel drops CC fast. Even so, regen
-# coast tops out near -1.5 m/s^2: this cannot stop for a stopped car, the driver
-# is always the brake. See also the spoofer's no-pedal cancel-delay=0.
+# Unmet-decel CANCEL. The stepped set-speed presses barely decelerate the car,
+# so the right hand-off trigger is not a fixed decel level but "the planner
+# wants to slow and the car ISN'T slowing" — i.e. the steps are failing. Fire
+# when the planner demands decel (aReq < DECEL_DEMAND_THRESHOLD) AND the achieved
+# accel falls short of the demand by DECEL_UNMET_GAP (aReq - aEgo < gap), held
+# for DECEL_CANCEL_SUSTAIN_S — then drop CC to regen coast + driver.
+#
+# Why gap-based, not a fixed threshold (drives 00000006 and 00000007):
+#   - A fixed -0.9 held ~44 mph straight at a lead for ~8 s while the planner
+#     wanted -0.45 the whole time (00000007) — the steps did nothing and -0.45
+#     never crossed -0.9. Too high.
+#   - A low fixed threshold nuisance-cancels on genuine slowdowns the DI IS
+#     handling. The gap term fixes both: it fires when decel is demanded but not
+#     achieved (steps failing / closing on a lead without slowing), and stays
+#     quiet when the car is actually decelerating (aEgo tracks aReq) or when the
+#     "jumpy decel" is just DI ripple at aReq ~= 0.
+# Hard braking still cancels instantly via ACCEL_CANCEL_THRESHOLD. And regardless
+# of all this, regen coast tops out near -1.5 m/s^2: vision ACC CANNOT stop for a
+# stopped car — the driver is always the brake.
+DECEL_DEMAND_THRESHOLD = -0.3   # m/s^2, planner is meaningfully asking to slow
+DECEL_UNMET_GAP = -0.3          # m/s^2, achieved decel falls short of demand by this much
+DECEL_CANCEL_SUSTAIN_S = 0.7    # s, held before handing off (hard braking bypasses via ACCEL_CANCEL_THRESHOLD)
 
 # A/B telemetry cadence at the 100 Hz carcontroller clock.
 TLM_PERIOD_IN_FRAMES = 20    # 5 Hz while modulating (fine enough for accel dynamics)
@@ -217,10 +213,13 @@ class VisionACCController:
       self._decel_demand_start_ms = 0
       return CruiseButtons.CANCEL
 
-    # Sustained moderate decel: hand off to regen coast early instead of
-    # dribbling ineffective set-speed steps (see DECEL_CANCEL_THRESHOLD above).
-    # Bypasses the holdoff/spacing gates below — a slowdown shouldn't wait.
-    if CC.actuators.accel < DECEL_CANCEL_THRESHOLD:
+    # Unmet decel: the planner wants to slow but the car isn't (stepped decel is
+    # failing) — hand off to regen coast + driver instead of holding speed into a
+    # lead. Bypasses the holdoff/spacing gates below — a slowdown shouldn't wait.
+    a_ego = float(getattr(CS.out, "aEgo", 0.0))
+    a_req = float(CC.actuators.accel)
+    decel_unmet = a_req < DECEL_DEMAND_THRESHOLD and (a_req - a_ego) < DECEL_UNMET_GAP
+    if decel_unmet:
       if self._decel_demand_start_ms == 0:
         self._decel_demand_start_ms = now
       elif now - self._decel_demand_start_ms >= DECEL_CANCEL_SUSTAIN_S * 1000:

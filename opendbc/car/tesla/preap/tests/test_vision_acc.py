@@ -19,7 +19,7 @@ from opendbc.car.tesla.preap.engagement import PreAPEngagement, SPOOF_ECHO_WINDO
 from opendbc.car.tesla.preap.stock_cc_spoofer import StockCCSpoofer
 from opendbc.car.tesla.preap.vision_acc import (
   VisionACCController, MIN_CRUISE_SPEED_MS, HUMAN_ACTION_HOLDOFF_MS, AUTO_ACTION_SPACING_MS,
-  DECEL_CANCEL_THRESHOLD, DECEL_CANCEL_SUSTAIN_S,
+  DECEL_DEMAND_THRESHOLD, DECEL_CANCEL_SUSTAIN_S,
 )
 from opendbc.car.tesla.values import CruiseButtons
 
@@ -95,7 +95,7 @@ def make_cc(*, long_active=True, accel=0.0):
 
 def make_cs(*, cruise_enabled=True, enable_long=True, di_state="ENABLED",
             v_ego=30.0, gas_pressed=False, cc_set_kph=100.0, ceiling_kph=120.0,
-            speed_units="KPH", last_human_ms=-100000):
+            speed_units="KPH", last_human_ms=-100000, a_ego=0.0):
   return SimpleNamespace(
     cruiseEnabled=cruise_enabled,
     enableLongControl=enable_long,
@@ -103,7 +103,7 @@ def make_cs(*, cruise_enabled=True, enable_long=True, di_state="ENABLED",
     speed_units=speed_units,
     v_cruise_actual_kph=cc_set_kph,
     pedal_speed_kph=ceiling_kph,
-    out=SimpleNamespace(vEgo=v_ego, gasPressed=gas_pressed),
+    out=SimpleNamespace(vEgo=v_ego, gasPressed=gas_pressed, aEgo=a_ego),
     engagement=SimpleNamespace(last_stalk_non_cancel_ms=last_human_ms),
   )
 
@@ -203,8 +203,9 @@ class TestHardBrakingBypass:
 
 
 class TestSustainedDecelCancel:
-  """Moderate decel (above the hard-brake floor) sustained past the window
-  drops CC to regen coast — the stepped presses can't stop a slowing lead.
+  """Unmet decel: the planner wants to slow but the car isn't (stepped presses
+  can't). Sustained past the window it drops CC to regen coast + driver. Gated
+  on the aReq-vs-aEgo gap so it stays quiet when the car is actually slowing.
   """
 
   def setup_method(self):
@@ -240,9 +241,17 @@ class TestSustainedDecelCancel:
 
   def test_mild_decel_never_cancels(self):
     cs = make_cs(cc_set_kph=108.0)
-    # Demand above (less negative than) the threshold never arms the timer
+    # Demand above (less negative than) the demand threshold never arms the timer
     for i in range(6):
-      assert self.ctrl.update(make_cc(accel=DECEL_CANCEL_THRESHOLD + 0.1), cs, frame=i) != CruiseButtons.CANCEL
+      assert self.ctrl.update(make_cc(accel=DECEL_DEMAND_THRESHOLD + 0.1), cs, frame=i) != CruiseButtons.CANCEL
+      self.t_ms += 300
+
+  def test_decel_tracked_no_cancel(self):
+    # Planner wants -1.0 and the car IS decelerating at -1.0 (aEgo tracks aReq):
+    # the gap is ~0, so this is not a "steps failing" case — never cancel.
+    cs = make_cs(cc_set_kph=108.0, a_ego=-1.0)
+    for i in range(6):
+      assert self.ctrl.update(make_cc(accel=-1.0), cs, frame=i) != CruiseButtons.CANCEL
       self.t_ms += 300
 
 
