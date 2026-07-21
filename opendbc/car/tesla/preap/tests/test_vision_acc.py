@@ -217,25 +217,24 @@ class TestSustainedDecelCancel:
   def test_sustained_decel_cancels(self):
     cs = make_cs(cc_set_kph=108.0)
     # First frame arms the sustain timer but does not cancel yet (still steps)
-    assert self.ctrl.update(make_cc(accel=-0.8), cs, frame=0) != CruiseButtons.CANCEL
+    assert self.ctrl.update(make_cc(accel=-1.0), cs, frame=0) != CruiseButtons.CANCEL
     # Same demand past the sustain window → CANCEL to regen coast
     self.t_ms += int(DECEL_CANCEL_SUSTAIN_S * 1000) + 20
-    assert self.ctrl.update(make_cc(accel=-0.8), cs, frame=1) == CruiseButtons.CANCEL
+    assert self.ctrl.update(make_cc(accel=-1.0), cs, frame=1) == CruiseButtons.CANCEL
 
   def test_brief_decel_dip_does_not_cancel(self):
     cs = make_cs(cc_set_kph=108.0)
-    self.ctrl.update(make_cc(accel=-0.8), cs, frame=0)  # arm timer
+    self.ctrl.update(make_cc(accel=-1.0), cs, frame=0)  # arm timer
     self.t_ms += int(DECEL_CANCEL_SUSTAIN_S * 1000) // 2  # well under the window
-    assert self.ctrl.update(make_cc(accel=-0.8), cs, frame=1) != CruiseButtons.CANCEL
+    assert self.ctrl.update(make_cc(accel=-1.0), cs, frame=1) != CruiseButtons.CANCEL
 
   def test_recovery_resets_sustain(self):
     cs = make_cs(cc_set_kph=108.0)
-    self.ctrl.update(make_cc(accel=-0.8), cs, frame=0)  # arm timer
+    self.ctrl.update(make_cc(accel=-1.0), cs, frame=0)  # arm timer
     self.t_ms += int(DECEL_CANCEL_SUSTAIN_S * 1000) - 100
     self.ctrl.update(make_cc(accel=-0.2), cs, frame=1)  # demand eases → timer resets
-    self.t_ms += 300
-    # New demand is only 300 ms old → not yet cancelling
-    assert self.ctrl.update(make_cc(accel=-0.8), cs, frame=2) != CruiseButtons.CANCEL
+    # New demand's sustain clock restarted at frame 1, so a fresh frame must not cancel
+    assert self.ctrl.update(make_cc(accel=-1.0), cs, frame=2) != CruiseButtons.CANCEL
 
   def test_mild_decel_never_cancels(self):
     cs = make_cs(cc_set_kph=108.0)

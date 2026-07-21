@@ -113,8 +113,18 @@ ACCEL_CANCEL_THRESHOLD = -1.3
 # slowdowns; the sustain filters brief traffic dips. Both tunable from a
 # re-drive's VisionACC.tlm — watch reason=sustained_decel_cancel frequency
 # against how the stop actually felt.
-DECEL_CANCEL_THRESHOLD = -0.6  # m/s^2
-DECEL_CANCEL_SUSTAIN_S = 0.5   # s
+DECEL_CANCEL_THRESHOLD = -0.9  # m/s^2
+DECEL_CANCEL_SUSTAIN_S = 0.2   # s
+# Tuning history (drive 00000006--053e173cb1, near-miss into a stopped car):
+# was -0.6 / 0.5 s. Two problems that pull in opposite directions, reconciled
+# here. (1) -0.6 canceled for merely-moderate slowdowns, dropping out of ACC
+# where stepped decreases would have been smoother (the "jumpy moderate decel"
+# note) — raised to -0.9 so only genuinely hard decel (a real stop) cancels and
+# -0.6..-0.9 keeps stepping. (2) The 0.5 s sustain delayed the hand-off on a
+# real stop — the car held ~44 mph for ~0.9 s while the planner already wanted
+# to stop — shortened to 0.2 s so a hard decel drops CC fast. Even so, regen
+# coast tops out near -1.5 m/s^2: this cannot stop for a stopped car, the driver
+# is always the brake. See also the spoofer's no-pedal cancel-delay=0.
 
 # A/B telemetry cadence at the 100 Hz carcontroller clock.
 TLM_PERIOD_IN_FRAMES = 20    # 5 Hz while modulating (fine enough for accel dynamics)
