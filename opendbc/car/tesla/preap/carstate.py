@@ -80,10 +80,12 @@ def update_preap(cs, can_parsers):
   if cs.enableLongControl and nap_conf.use_pedal:
     ret.cruiseState.speed = cs.pedal_speed_kph * CV.KPH_TO_MS
   else:
+    # Same bits this always read (48-55): the stock-CC set speed. Only the
+    # signal's DBC name changed when the pre-AP field swap was corrected.
     if speed_units == "KPH":
-      ret.cruiseState.speed = max(cp_chassis.vl["DI_state"]["DI_digitalSpeed"] * CV.KPH_TO_MS, 1e-3)
+      ret.cruiseState.speed = max(cp_chassis.vl["DI_state"]["DI_cruiseSet"] * CV.KPH_TO_MS, 1e-3)
     elif speed_units == "MPH":
-      ret.cruiseState.speed = max(cp_chassis.vl["DI_state"]["DI_digitalSpeed"] * CV.MPH_TO_MS, 1e-3)
+      ret.cruiseState.speed = max(cp_chassis.vl["DI_state"]["DI_cruiseSet"] * CV.MPH_TO_MS, 1e-3)
 
   ret.cruiseState.standstill = False
   ret.standstill = cruise_state == "STANDSTILL"
