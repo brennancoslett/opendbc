@@ -88,8 +88,12 @@ def update_preap(cs, can_parsers):
 
   if cs.enableLongControl and nap_conf.use_pedal:
     ret.cruiseState.speed = cs.pedal_speed_kph * CV.KPH_TO_MS
-  elif speed_units is not None:
-    ret.cruiseState.speed = max(ret.vEgoCluster, 1e-3)
+  # Bits 48-55 are the stock-CC set speed, so this no longer has to borrow the
+  # cluster speed as a stand-in for it.
+  elif speed_units == "KPH":
+    ret.cruiseState.speed = max(cp_chassis.vl["DI_state"]["DI_cruiseSet"] * CV.KPH_TO_MS, 1e-3)
+  elif speed_units == "MPH":
+    ret.cruiseState.speed = max(cp_chassis.vl["DI_state"]["DI_cruiseSet"] * CV.MPH_TO_MS, 1e-3)
 
   ret.cruiseState.standstill = False
   ret.standstill = cruise_state == "STANDSTILL"

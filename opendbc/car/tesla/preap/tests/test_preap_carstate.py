@@ -113,18 +113,27 @@ class TestPreAPCarStateUpdate(unittest.TestCase):
         self.assertEqual(CS.steeringDisengage, should_disengage)
 
   def test_cluster_speed_uses_dash_signal(self):
+    """The dash speed and the cruise set speed are separate DI_state fields.
+
+    They are deliberately different here: before the pre-AP field mapping was
+    corrected, DI_digitalSpeed named bits 48-55 -- the set speed -- so the
+    cluster read the set speed and cruiseState.speed could borrow it and still
+    look right. Reading one value for both would pass under the old mapping and
+    fail under the correct one.
+    """
     digital_speed = 42
+    cruise_set = 55
     for speed_units, conversion in ((0, CV.MPH_TO_MS), (1, CV.KPH_TO_MS)):
       with self.subTest(speed_units=speed_units):
         CI = self._make_interface()
         packets = self._can_packet("DI_state", {
           "DI_speedUnits": speed_units,
           "DI_digitalSpeed": digital_speed,
+          "DI_cruiseSet": cruise_set,
         })
         CS = CI.update(packets)
-        expected_speed = digital_speed * conversion
-        self.assertAlmostEqual(CS.vEgoCluster, expected_speed, places=5)
-        self.assertAlmostEqual(CS.cruiseState.speed, expected_speed, places=5)
+        self.assertAlmostEqual(CS.vEgoCluster, digital_speed * conversion, places=5)
+        self.assertAlmostEqual(CS.cruiseState.speed, cruise_set * conversion, places=5)
 
   def test_turn_signal_stalk_state_uses_lever_level(self):
     for lever, expected in ((0, 0), (1, 1), (2, 2), (3, 0)):
