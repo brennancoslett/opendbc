@@ -31,6 +31,9 @@ class PreAPEngagement:
     self.preap_cc_cancel_needed = False
     self.preap_cc_engage_needed = False
     self.preap_last_cc_spoof_ms = 0
+    # Stamped when the spoofer TXes a speed-adjust button, so the RX echo of
+    # our own frame isn't mistaken for a human press.
+    self.preap_last_speed_spoof_ms = -10000
     self.pending_cancel_at_ms = 0
 
     self.preap_brake_pressed_prev = False
