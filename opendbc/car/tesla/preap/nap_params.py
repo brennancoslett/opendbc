@@ -14,6 +14,7 @@ class NAPParamKeys:
   PEDAL_ENABLED = "NAPPedalEnabled"
   FOLLOW_DISTANCE = "NAPFollowDistance"
   NO_PEDAL_ACC = "NAPNoPedalACCEnabled"
+  NO_PEDAL_ACC_BRAKE_CHIME = "NAPNoPedalACCBrakeChime"
   # Pedal Hardware
   PEDAL_PROFILE = "NAPPedalProfile"
   PEDAL_CAN_BUS = "NAPPedalCanBus"
@@ -32,6 +33,9 @@ class NAPParamKeys:
   IBOOSTER_ENABLED = "NAPiBoosterEnabled"
   BRAKE_FACTOR = "NAPBrakeFactor"
 
+  # Display
+  ALWAYS_SHOW_MAX_SPEED = "NAPAlwaysShowMaxSpeed"
+
   # Advanced
   FORCE_PRE_AP = "NAPForcePreAP"
 
@@ -41,6 +45,7 @@ DEFAULTS = {
   NAPParamKeys.ADAPTIVE_ACCEL: True,
   NAPParamKeys.PEDAL_ENABLED: False,
   NAPParamKeys.NO_PEDAL_ACC: False,
+  NAPParamKeys.NO_PEDAL_ACC_BRAKE_CHIME: False,
   NAPParamKeys.FOLLOW_DISTANCE: 4,
   NAPParamKeys.PEDAL_PROFILE: 4,
   NAPParamKeys.PEDAL_CAN_BUS: 2,
@@ -54,5 +59,6 @@ DEFAULTS = {
   NAPParamKeys.RADAR_OFFSET: 0.0,
   NAPParamKeys.IBOOSTER_ENABLED: False,
   NAPParamKeys.BRAKE_FACTOR: 1.0,
+  NAPParamKeys.ALWAYS_SHOW_MAX_SPEED: False,
   NAPParamKeys.FORCE_PRE_AP: False,
 }

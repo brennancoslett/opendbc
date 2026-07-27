@@ -230,6 +230,7 @@ def update_preap(cs, can_parsers):
   ret.pedalMaxRegen = cs.pccEvent == "pedalMaxRegen"
   ret.teslaCCEngaged = cs.pccEvent == "teslaCCEngaged"
   ret.teslaCCDisengaged = cs.pccEvent == "teslaCCDisengaged"
+  ret.noPedalAccBrakeHandoff = cs.pccEvent == "noPedalAccBrakeHandoff"
   ret.teslaCCNotArmed = (
     not nap_conf.use_pedal
     and cs.cruiseEnabled

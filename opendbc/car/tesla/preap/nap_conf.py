@@ -23,6 +23,7 @@ DEFAULT_CONFIG = {
   'double_pull_window_ms': 400,
   'use_pedal': False,
   'no_pedal_acc': False,
+  'no_pedal_acc_brake_chime': False,
   'pedal_calibrated': False,
   'accel_profile': 'Chill',
   'pedal_can_zero': False,
@@ -171,6 +172,19 @@ class NAPConf:
   @no_pedal_acc.setter
   def no_pedal_acc(self, value):
     self._put_param_bool(NAPParamKeys.NO_PEDAL_ACC, 'no_pedal_acc', value)
+
+  @property
+  def no_pedal_acc_brake_chime(self):
+    """Raise the distinct "ACC can't slow, you brake" alert on a braking CANCEL.
+
+    Off by default: the generic disengage beep still plays, and the extra chime
+    is a preference, not a safety mechanism. Read live (only on the handoff
+    edge, which is rare), so it takes effect without a reboot."""
+    return self._get_param_bool(NAPParamKeys.NO_PEDAL_ACC_BRAKE_CHIME, 'no_pedal_acc_brake_chime')
+
+  @no_pedal_acc_brake_chime.setter
+  def no_pedal_acc_brake_chime(self, value):
+    self._put_param_bool(NAPParamKeys.NO_PEDAL_ACC_BRAKE_CHIME, 'no_pedal_acc_brake_chime', value)
 
   @property
   def radar_enabled(self):
