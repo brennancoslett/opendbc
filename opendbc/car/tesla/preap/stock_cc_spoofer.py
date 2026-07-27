@@ -59,6 +59,19 @@ class StockCCSpoofer:
     self.pcc_event = None
     self.renorm_rounds = 0
     self.renorm_seen_standby = False
+    # No-pedal ACC speed-press request; one-shot, consumed at the next TX slot
+    self.requested_button = None
+
+  def request_button(self, button):
+    """Queue a no-pedal ACC speed press (UP/DN 1ST/2ND) for the next TX slot.
+
+    CANCEL must not come through here — route it via CS.preap_cc_cancel_needed
+    so it gets the cancel-pending machinery and echo filtering.
+    """
+    if button == CruiseButtons.CANCEL:
+      carlog.error("StockCC: CANCEL routed via request_button — dropped; use preap_cc_cancel_needed")
+      return
+    self.requested_button = button
 
   def update(self, CS, frame, tesla_can, can_bus_party):
     can_sends = []
@@ -155,6 +168,22 @@ class StockCCSpoofer:
         if sent is not None:
           can_sends.append(sent)
           self._stamp_spoof(CS, speed=True)
+    elif self.requested_button is not None and not self.cancel_pending and frame % 10 == 0:
+      # No-pedal ACC speed press — lowest priority: cancel and engage always win
+      sent = self._send(CS, tesla_can, can_bus_party, self.requested_button)
+      if sent is not None:
+        can_sends.append(sent)
+        # Stamp the FSM so the RX echo of this frame isn't read as a human press
+        engagement = getattr(CS, "engagement", None)
+        if engagement is not None:
+          engagement.preap_last_speed_spoof_ms = _current_time_millis()
+      self.requested_button = None
+
+    # A queued speed press is stale after its slot chance passes with a
+    # cancel/engage in flight — drop it rather than fire it late.
+    if self.cancel_pending or self.cc_engage_phase != _PHASE_IDLE:
+      self.requested_button = None
+
     # --- Edge events for teslaCCEngaged / teslaCCDisengaged ---
     di_cc_engaged = getattr(CS, "di_cruise_state", "OFF") == "ENABLED"
     if di_cc_engaged and not self.prev_di_cc_engaged:

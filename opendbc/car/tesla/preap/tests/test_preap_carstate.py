@@ -77,14 +77,15 @@ class TestPreAPDIStateDecode(unittest.TestCase):
   """
 
   def _cs(self, *, di_cruise_state, di_pedal_pos, di_cruise_set, di_digital_speed=0,
-          esp_speed_kph=0.0, settle_set_change=True):
+          esp_speed_kph=0.0, no_pedal_acc=True, settle_set_change=True):
     from unittest.mock import PropertyMock, patch
     from opendbc.can import CANPacker
     from opendbc.car.car_helpers import interfaces
     from opendbc.car.tesla.values import CANBUS
 
     conf = "opendbc.car.tesla.preap.nap_conf.NAPConf"
-    with patch(f"{conf}.use_pedal", new_callable=PropertyMock, return_value=False):
+    with patch(f"{conf}.no_pedal_acc", new_callable=PropertyMock, return_value=no_pedal_acc), \
+         patch(f"{conf}.use_pedal", new_callable=PropertyMock, return_value=False):
       CarInterface = interfaces["TESLA_MODEL_S_PREAP"]
       CP = CarInterface.get_params("TESLA_MODEL_S_PREAP", {i: {} for i in range(8)}, [],
                                    alpha_long=False, is_release=False, docs=False)
@@ -118,7 +119,7 @@ class TestPreAPDIStateDecode(unittest.TestCase):
   def test_plain_no_pedal_cruise_speed_reads_same_bits(self):
     # the pre-existing stock-CC display path must still see the true set speed
     _, CS = self._cs(di_cruise_state=2, di_pedal_pos=0.0,
-                     di_cruise_set=40, di_digital_speed=55)
+                     di_cruise_set=40, di_digital_speed=55, no_pedal_acc=False)
     self.assertAlmostEqual(CS.cruiseState.speed, 40 * 0.44704, places=2)
 
   def test_pedal_alone_during_stock_cc_is_not_a_gas_press(self):

@@ -88,6 +88,7 @@ def update_preap(cs, can_parsers):
 
   # Cruise state
   use_pedal = nap_conf.use_pedal
+  no_pedal_acc = nap_conf.no_pedal_acc and not use_pedal
   cruise_state = cs.can_defines["DI_state"]["DI_cruiseState"].get(int(cp_chassis.vl["DI_state"]["DI_cruiseState"]), None)
   cs.di_cruise_state = cruise_state or "OFF"
   speed_units = cs.can_defines["DI_state"]["DI_speedUnits"].get(int(cp_chassis.vl["DI_state"]["DI_speedUnits"]), None)
@@ -134,12 +135,14 @@ def update_preap(cs, can_parsers):
   # DI cruise transitions, with the raw pedal signal — cheap, and the record
   # that settled the pedal semantics and the DI_state field swap above.
   if cs.di_cruise_state != cs.prev_di_cruise_state:
-    carlog.warning("PreAP DI cruise %s -> %s | DI_pedalPos=%.1f gasPressed=%s",
+    carlog.warning("PreAP DI cruise %s -> %s | DI_pedalPos=%.1f gasPressed=%s no_pedal_acc=%s",
                    cs.prev_di_cruise_state, cs.di_cruise_state,
-                   pedal_pos, ret.gasPressed)
+                   pedal_pos, ret.gasPressed, no_pedal_acc)
     cs.prev_di_cruise_state = cs.di_cruise_state
 
-  if cs.enableLongControl and use_pedal:
+  if cs.enableLongControl and (use_pedal or no_pedal_acc):
+    # Software-owned set speed: pedal target, or the no-pedal ACC ceiling.
+    # card.py's Pre-AP software-cruise path reads this back as vCruise.
     ret.cruiseState.speed = cs.pedal_speed_kph * CV.KPH_TO_MS
   else:
     # Same bits this always read (48-55): the stock-CC set speed. Only the
@@ -192,7 +195,8 @@ def update_preap(cs, can_parsers):
   button_events = cs.engagement.process_buttons(
     cs.cruise_buttons, cs.prev_cruise_buttons, curr_time_ms,
     ret.vEgo, cs.speed_units, use_pedal, pedal_long_allowed,
-    long_control_allowed, real_brake_pressed, cs.di_cruise_state)
+    long_control_allowed, real_brake_pressed, cs.di_cruise_state,
+    no_pedal_acc=no_pedal_acc)
   # Suppress brakePressed so generic brake-disengage path doesn't kill lateral
   ret.brakePressed = False
   ret.buttonEvents = button_events
