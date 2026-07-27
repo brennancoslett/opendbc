@@ -108,10 +108,12 @@ static uint32_t preap_last_stalk_engage_us = 0;
 // so they're hard-blocked unless PREAP_FLAG_NO_PEDAL_ACC is set. All four speed-
 // adjust values are additionally rate-limited while no-pedal ACC is active, as a
 // panda-side floor under the python spacing gate (no_pedal_acc.py
-// AUTO_ACTION_SPACING_MS=400ms) — set below it so python's own spacing is what
-// normally binds and this only catches a runaway/bugged caller. Kept below
-// python's value rather than equal to it, so clock jitter between the two
-// can't cause panda to block a send python thought was already spaced out.
+// AUTO_ACTION_SPACING_MS=600ms, the sender's minimum — the floor climb limiter
+// only ever spaces presses further apart) — set below it so python's own
+// spacing is what normally binds and this only catches a runaway/bugged caller.
+// Kept below python's value rather than equal to it, so clock jitter between
+// the two can't cause panda to block a send python thought was already spaced
+// out.
 // CANCEL and MAIN are exempt: a cancel must never be delayed.
 static uint32_t preap_last_speed_button_tx_us = 0;
 #define PREAP_SPEED_BUTTON_TX_MIN_INTERVAL_US 300000U  // 300ms
