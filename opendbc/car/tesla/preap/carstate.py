@@ -4,6 +4,7 @@ import time
 
 from opendbc.can import CANParser
 from opendbc.car import Bus, structs
+from opendbc.car.carlog import carlog
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_THRESHOLD
 from opendbc.car.tesla.preap.nap_params import NAPParamKeys
@@ -18,6 +19,24 @@ except ImportError:
 # Pre-AP door signal names from GTW_carState
 _DOORS = ("DOOR_STATE_FL", "DOOR_STATE_FR", "DOOR_STATE_RL", "DOOR_STATE_RR", "DOOR_STATE_FrontTrunk", "BOOT_STATE")
 
+# Driver-override detection during stock CC (DI ENABLED). DI_pedalPos is
+# CC-authored while the DI holds cruise (confirmed 2026-07-14 drive 4: 100%
+# of 31,580 ENABLED frames on a foot-off-attempt drive read pedal-pressed),
+# so a raw threshold on DI_pedalPos can't tell a driver press from the DI's
+# own throttle blend. The DI never reports its OVERRIDE cruise state on this
+# car, so the only other override tell is vEgo pulling meaningfully above
+# the held set speed — the DI's own control never commands past its set.
+# Fresh set-speed changes (stalk step, or a future no-pedal ACC spoof) cause a
+# few seconds of legitimate vEgo-above-set lag while the car decelerates to
+# the new number, with a nonzero pedal reading from the same blend — that
+# produced two false 3s "override" runs on drive 4 exactly on the frame the
+# set changed. Validated against known ground truth (drive 2, ~3 real
+# overrides driven; drive 4, foot-off, expect none): gating on a grace
+# period after any DI_cruiseSet change leaves 3 isolated blips on drive 2
+# and zero on drive 4.
+OVERRIDE_SPEED_MARGIN_MPH = 2.0
+OVERRIDE_SET_CHANGE_GRACE_MS = 3000
+
 
 def _current_time_millis():
   return int(round(time.time() * 1000))
@@ -28,13 +47,13 @@ def update_preap(cs, can_parsers):
   cp_pt = can_parsers[Bus.pt]
   cp_chassis = can_parsers[Bus.chassis]
   ret = structs.CarState()
+  curr_time_ms = _current_time_millis()
 
   # Vehicle speed
   ret.vEgoRaw = cp_chassis.vl["ESP_B"]["ESP_vehicleSpeed"] * CV.KPH_TO_MS
   ret.vEgo, ret.aEgo = cs.update_speed_kf(ret.vEgoRaw)
 
-  # Gas pedal — threshold avoids sticky overrides from DI_pedalPos noise
-  ret.gasPressed = cp_pt.vl["DI_torque1"]["DI_pedalPos"] > PEDAL_DI_PRESSED
+  pedal_pos = cp_pt.vl["DI_torque1"]["DI_pedalPos"]
 
   # Brake pedal
   ret.brake = 0
@@ -68,6 +87,7 @@ def update_preap(cs, can_parsers):
   cs.engagement.handle_steering_disengage(ret.steeringDisengage)
 
   # Cruise state
+  use_pedal = nap_conf.use_pedal
   cruise_state = cs.can_defines["DI_state"]["DI_cruiseState"].get(int(cp_chassis.vl["DI_state"]["DI_cruiseState"]), None)
   cs.di_cruise_state = cruise_state or "OFF"
   speed_units = cs.can_defines["DI_state"]["DI_speedUnits"].get(int(cp_chassis.vl["DI_state"]["DI_speedUnits"]), None)
@@ -77,15 +97,57 @@ def update_preap(cs, can_parsers):
   if speed_units is not None:
     cs.speed_units = speed_units
 
-  if cs.enableLongControl and nap_conf.use_pedal:
+  # Actual stock-CC set speed from the DI, in display units (no-pedal ACC
+  # modulates this via spoofed stalk presses and needs the read-back).
+  # Pre-AP firmware swaps two DI_state fields relative to the AP-era DBC:
+  # bits 32-40 carry the displayed vehicle speed and bits 48-55 the cruise set
+  # speed (both display units, scale 1). Established on the 2026-07-14 drives:
+  # bits 48-55 held 41 while the car converged to and held 40.3 mph for 30 s,
+  # stepped 41->36 on a stalk-down and the car settled at 36; bits 32-40
+  # tracked vEgo 1:1 throughout, including while ENABLED. tesla_preap.dbc
+  # names reflect the pre-AP layout, so this read is bits 48-55.
+  di_cruise_set = cp_chassis.vl["DI_state"]["DI_cruiseSet"]
+  cs.v_cruise_actual_kph = di_cruise_set * CV.MPH_TO_KPH if cs.speed_units == "MPH" else di_cruise_set
+
+  if di_cruise_set != cs.prev_di_cruise_set_raw:
+    cs.last_cruise_set_change_ms = curr_time_ms
+    cs.prev_di_cruise_set_raw = di_cruise_set
+
+  # Gas pedal. DI_pedalPos is the driver's accelerator only while the DI
+  # isn't holding stock CC itself: during ENABLED it's CC-authored (see
+  # OVERRIDE_SPEED_MARGIN_MPH comment above), so a driver override there is
+  # detected instead by vEgo pulling above the held set speed, outside the
+  # grace window after a set-speed change.
+  pedal_threshold_pressed = pedal_pos > PEDAL_DI_PRESSED
+  if cs.di_cruise_state == "ENABLED" and not use_pedal:
+    vego_mph = ret.vEgo * CV.MS_TO_MPH
+    set_mph = cs.v_cruise_actual_kph * CV.KPH_TO_MPH
+    set_change_recent = (curr_time_ms - cs.last_cruise_set_change_ms) < OVERRIDE_SET_CHANGE_GRACE_MS
+    ret.gasPressed = (
+      pedal_threshold_pressed
+      and vego_mph > (set_mph + OVERRIDE_SPEED_MARGIN_MPH)
+      and not set_change_recent
+    )
+  else:
+    ret.gasPressed = pedal_threshold_pressed
+
+  # DI cruise transitions, with the raw pedal signal — cheap, and the record
+  # that settled the pedal semantics and the DI_state field swap above.
+  if cs.di_cruise_state != cs.prev_di_cruise_state:
+    carlog.warning("PreAP DI cruise %s -> %s | DI_pedalPos=%.1f gasPressed=%s",
+                   cs.prev_di_cruise_state, cs.di_cruise_state,
+                   pedal_pos, ret.gasPressed)
+    cs.prev_di_cruise_state = cs.di_cruise_state
+
+  if cs.enableLongControl and use_pedal:
     ret.cruiseState.speed = cs.pedal_speed_kph * CV.KPH_TO_MS
   else:
     # Same bits this always read (48-55): the stock-CC set speed. Only the
     # signal's DBC name changed when the pre-AP field swap was corrected.
     if speed_units == "KPH":
-      ret.cruiseState.speed = max(cp_chassis.vl["DI_state"]["DI_cruiseSet"] * CV.KPH_TO_MS, 1e-3)
+      ret.cruiseState.speed = max(di_cruise_set * CV.KPH_TO_MS, 1e-3)
     elif speed_units == "MPH":
-      ret.cruiseState.speed = max(cp_chassis.vl["DI_state"]["DI_cruiseSet"] * CV.MPH_TO_MS, 1e-3)
+      ret.cruiseState.speed = max(di_cruise_set * CV.MPH_TO_MS, 1e-3)
 
   ret.cruiseState.standstill = False
   ret.standstill = cruise_state == "STANDSTILL"
@@ -122,8 +184,6 @@ def update_preap(cs, can_parsers):
         _nap_params.put(NAPParamKeys.FOLLOW_DISTANCE, stalk_follow)
         cs.prev_stalk_follow = stalk_follow
 
-  curr_time_ms = _current_time_millis()
-  use_pedal = nap_conf.use_pedal
   pedal_factor = float(nap_conf.pedal_factor)
   pedal_transform_valid = math.isfinite(pedal_factor) and abs(pedal_factor) > 1e-6
   pedal_long_allowed = use_pedal and pedal_transform_valid
