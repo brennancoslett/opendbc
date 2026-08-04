@@ -361,6 +361,7 @@ struct CarControl {
   orientationNED @13 :List(Float32);
   angularVelocity @14 :List(Float32);
   currentCurvature @17 :Float32;  # From vehicle model
+  planSpeedTarget @18 :Float32;  # m/s, longitudinal planner's terminal (2.5 s horizon) speed; 0 when no plan
 
   cruiseControl @4 :CruiseControl;
   hudControl @5 :HUDControl;

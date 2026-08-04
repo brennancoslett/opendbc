@@ -42,6 +42,8 @@ Fields (all key=value):
   desired kph   — target set speed = vEgo + aReq*proj (capped at ceiling)
   ceil    kph   — driver ceiling (pedal_speed_kph)
   off     kph   — desired - ccSet (the gap the button logic acts on)
+  plan    kph   — CC.planSpeedTarget (planner's 2.5 s terminal speed), the
+          hold-branch climb gate's input; 0.0 when the plan is empty
   btn     the button decided this frame (none if in deadband)
 
 The core A/B question — does raising proj make the DI accelerate more? — is
@@ -160,6 +162,36 @@ DECEL_CANCEL_HUMAN_SETTLE_MS = 2500
 # 10 s. Below that the request is at the level of the planner's own equilibrium
 # ripple rather than a real demand to speed up.
 FLOOR_CLIMB_MAX_INTERVAL_MS = 10000
+
+# Escape hatch for the hold-at-set deadlock (drive 0000004f, 2026-08-04: 922
+# tlm frames parked 1-2 mph under the ceiling, longest run 66 s). The DI is
+# bang-bang: below a ~1.8-2.2 kph set-vEgo gap it delivers zero accel, so vEgo
+# parks ~1.5 kph under the set (median +1.52 that day). From there the
+# projection needs aReq >= ~+0.28 to reach the set, but the planner asks a
+# median +0.16 near its target — so the hold branch holds forever, one step
+# under MAX. The escape gates on the planner's own terminal speed
+# (CC.planSpeedTarget = longitudinalPlan.speeds[-1]) instead of the
+# vEgo-anchored projection:
+#
+#   plan - vEgo >= PLAN_SPEED_CLIMB_MARGIN_KPH  "the planner wants to be
+#   meaningfully faster in 2.5 s". Measured separation on that drive: stall
+#   windows median +2.7 (80% >= 1.5); settled behind a lead — the 0000002e
+#   ratchet case the hold branch exists to prevent — median -1.2 (10% >= 1.5).
+#   Lead presence itself does NOT separate them: hudControl.leadVisible was
+#   true 66-100% of the stall windows (the model reports distant leads on an
+#   open road). Nor does plan >= ccSet: the MPC's 2.5 s terminal speed
+#   under-reaches v_cruise from a standing 3-5 kph deficit (median -0.6 kph
+#   below the set during the stall, above it only 7.2% of frames).
+#
+#   ccSet - vEgo < DI_IDLE_GAP_KPH  the DI is idle inside its dead zone, so
+#   one press yields exactly one bang-bang step. Excludes the catching-up
+#   state (drive 0000002e 18:39:06: set 8.7 kph over vEgo) where the car is
+#   still accelerating toward its set and climbing would pile on.
+#
+# Climbs through this escape share the floor's rate limiter, so the set speed
+# still never rises faster than the planner's own request would raise the car.
+PLAN_SPEED_CLIMB_MARGIN_KPH = 1.5
+DI_IDLE_GAP_KPH = 2.2
 
 # A/B telemetry cadence at the 100 Hz carcontroller clock.
 TLM_PERIOD_IN_FRAMES = 20    # 5 Hz while modulating (fine enough for accel dynamics)
@@ -371,7 +403,23 @@ class NoPedalACCController:
         # step is what ratcheted at 18:14:52 the day before: each press raised
         # the set, which raised the next target, 61.2 -> 72.4 kph in 3.6 s at a
         # lead. Hold keeps both failures out: no slam, no ratchet.
-        desired_kph = cc_set_kph
+        #
+        # One escape (see PLAN_SPEED_CLIMB_MARGIN_KPH): an unconditional hold
+        # deadlocks one step under MAX, because the DI's dead zone parks vEgo
+        # where the projection can never reach the set again. When the
+        # planner's own terminal speed says it wants meaningfully more than
+        # vEgo — which it does NOT when settled behind a lead, the ratchet
+        # signature — and the DI is idle in its dead zone, take one
+        # rate-limited floor climb instead of holding.
+        plan_speed_kph = float(getattr(CC, "planSpeedTarget", 0.0)) * CV.MS_TO_KPH
+        v_ego_kph = CS.out.vEgo * CV.MS_TO_KPH
+        wants_more = plan_speed_kph - v_ego_kph >= PLAN_SPEED_CLIMB_MARGIN_KPH
+        di_idle = cc_set_kph - v_ego_kph < DI_IDLE_GAP_KPH
+        if wants_more and di_idle and now - self.last_floor_climb_ms >= self._floor_climb_interval_ms(a_req, half_kph):
+          desired_kph = cc_set_kph + half_kph + 0.05
+          floor_applied = True
+        else:
+          desired_kph = cc_set_kph
     self._desired_kph = min(desired_kph, ceiling_kph)
     self._offset_kph = self._desired_kph - cc_set_kph
     button = self.calc_button(
@@ -470,13 +518,14 @@ class NoPedalACCController:
 
     carlog.info(
       "NoPedalACC.tlm f=%d proj=%.2f region=%d reason=%s di=%s long=%d gas=%d units=%s " +
-      "vEgo=%.2f aEgo=%+.2f aReq=%+.2f ccSet=%.1f desired=%.1f ceil=%.1f off=%+.1f btn=%s",
+      "vEgo=%.2f aEgo=%+.2f aReq=%+.2f ccSet=%.1f desired=%.1f ceil=%.1f off=%+.1f plan=%.1f btn=%s",
       frame, ACCEL_PROJECTION_S, int(region), self._reason,
       getattr(CS, "di_cruise_state", "OFF"), int(CC.longActive), int(CS.out.gasPressed),
       getattr(CS, "speed_units", "?"),
       CS.out.vEgo, a_ego, float(CC.actuators.accel),
       getattr(CS, "v_cruise_actual_kph", 0.0), desired,
       getattr(CS, "pedal_speed_kph", 0.0), offset,
+      float(getattr(CC, "planSpeedTarget", 0.0)) * CV.MS_TO_KPH,
       _BUTTON_NAMES.get(button, "none" if button is None else str(button)))
 
 

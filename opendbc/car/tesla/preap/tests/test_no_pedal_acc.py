@@ -90,8 +90,10 @@ class TestCalcButtonAccel:
     assert calc(desired=59, cc_set=50, is_mph=True) == CruiseButtons.RES_ACCEL_2ND
 
 
-def make_cc(*, long_active=True, accel=0.0):
-  return SimpleNamespace(longActive=long_active, actuators=SimpleNamespace(accel=accel))
+def make_cc(*, long_active=True, accel=0.0, plan_speed=0.0):
+  # plan_speed is CC.planSpeedTarget in m/s; capnp default 0.0 = no plan
+  return SimpleNamespace(longActive=long_active, actuators=SimpleNamespace(accel=accel),
+                         planSpeedTarget=plan_speed)
 
 
 def make_cs(*, cruise_enabled=True, enable_long=True, di_state="ENABLED",
@@ -204,6 +206,52 @@ class TestControllerGating:
     # speed must produce no press at all.
     cs = make_cs(v_ego=17.7, a_ego=0.3, cc_set_kph=72.4, ceiling_kph=72.4, speed_units="MPH")
     assert self.ctrl.update(make_cc(accel=0.30), cs, frame=0) is None
+
+  def test_hold_deadlock_escape_climbs_the_last_step(self):
+    # Regression, drive 0000004f (2026-08-04): 922 tlm frames parked 1-2 mph
+    # under the ceiling, longest run 66 s. The DI's bang-bang dead zone parks
+    # vEgo ~1.5 kph under the set (median +1.52 that day), from where the
+    # projection needs aReq >= ~+0.28 to reach the set while the planner asks a
+    # median +0.16 — so the hold branch held forever, one step under MAX. The
+    # planner's terminal speed (median vEgo +2.7 kph in the stall windows) says
+    # it wants more, and must drive one rate-limited climb.
+    cs = make_cs(v_ego=17.0, cc_set_kph=62.7, ceiling_kph=64.4, speed_units="MPH")
+    btn = self.ctrl.update(make_cc(accel=0.16, plan_speed=17.75), cs, frame=0)
+    assert btn == CruiseButtons.RES_ACCEL
+
+  def test_hold_deadlock_escape_is_rate_limited(self):
+    # Same frame again inside the floor interval (~2.8 s at aReq +0.16): the
+    # escape shares the floor's rate limiter, so no second press yet.
+    kw = dict(v_ego=17.0, cc_set_kph=62.7, ceiling_kph=64.4, speed_units="MPH")
+    cc = make_cc(accel=0.16, plan_speed=17.75)
+    assert self.ctrl.update(cc, make_cs(**kw), frame=0) == CruiseButtons.RES_ACCEL
+    self.t_ms += AUTO_ACTION_SPACING_MS + 400
+    assert self.ctrl.update(cc, make_cs(**kw), frame=1) is None
+    self.t_ms += 2500
+    assert self.ctrl.update(cc, make_cs(**kw), frame=2) == CruiseButtons.RES_ACCEL
+
+  def test_hold_without_plan_speed_stays_a_hold(self):
+    # planSpeedTarget unset (0.0, the capnp default): the escape must not fire
+    # and the branch behaves exactly as before — old replays and any caller
+    # that doesn't populate the field keep today's behavior.
+    cs = make_cs(v_ego=17.0, cc_set_kph=62.7, ceiling_kph=64.4, speed_units="MPH")
+    assert self.ctrl.update(make_cc(accel=0.16), cs, frame=0) is None
+
+  def test_settled_behind_lead_does_not_escape_the_hold(self):
+    # The 0000002e 18:14:52 ratchet frame with a realistic plan: settled behind
+    # a lead the MPC's terminal speed sits AT vEgo (measured lead-source median
+    # -1.2 kph on 0000004f), so the escape's wants-more gate must block and the
+    # hold must hold — this is the failure mode the hold branch exists for.
+    cs = make_cs(v_ego=16.66, cc_set_kph=61.2, ceiling_kph=80.5, speed_units="MPH")
+    assert self.ctrl.update(make_cc(accel=0.01, plan_speed=16.7), cs, frame=0) is None
+
+  def test_catching_up_does_not_escape_the_hold(self):
+    # The 0000002e 18:39:06 catching-up frame with the plan wanting more: the
+    # set already sits 8.7 kph over vEgo (far outside the DI's dead zone), the
+    # car is still accelerating toward it, and climbing would pile on. The
+    # DI-idle gate must block the escape.
+    cs = make_cs(v_ego=17.7, a_ego=0.3, cc_set_kph=72.4, ceiling_kph=72.4, speed_units="MPH")
+    assert self.ctrl.update(make_cc(accel=0.30, plan_speed=18.45), cs, frame=0) is None
 
   def test_settled_behind_lead_still_walks_down_when_planner_brakes(self):
     # The approach into that same event (18:14:43.2), where the controller was
