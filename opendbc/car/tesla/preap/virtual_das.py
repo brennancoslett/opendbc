@@ -40,6 +40,16 @@ from opendbc.car.tesla.pedal.controller import (
 
 FF_TABLE_PATH = "/data/vdas_ff_table.json"
 
+
+def _pedal_di_floor() -> float:
+  """Deepest DI the calibrated pedal can emit, or the nominal bound.
+
+  Falls back to PEDAL_DI_MIN when the config object does not carry a
+  calibration, which is the bound this used before the calibrated floor
+  existed -- a partial config must not widen the controller's authority.
+  """
+  return float(getattr(nap_conf, "pedal_di_floor", PEDAL_DI_MIN))
+
 # Inner PID error deadband: brief or sign-changing errors below this threshold
 # are zeroed before entering the PID. A coherent same-sign residual earns
 # integral authority after a dwell, so persistent road-load bias still closes.
@@ -539,7 +549,7 @@ class VirtualDAS:
 
     pedal_profile = nap_conf.get_pedal_profile_values()
     max_pedal_value = float(interp(v_ego, PEDAL_BP, pedal_profile))
-    pedal_di_bounded = float(clip(pedal_di_unclipped, PEDAL_DI_MIN, max_pedal_value))
+    pedal_di_bounded = float(clip(pedal_di_unclipped, _pedal_di_floor(), max_pedal_value))
 
     if negative_handoff_in_progress:
       pedal_ramp_rate_up = min(pedal_ramp_rate_up, NEGATIVE_HANDOFF_PEDAL_STEP)

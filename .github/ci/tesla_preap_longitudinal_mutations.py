@@ -506,10 +506,10 @@ MUTATIONS = (
     name="hidden-physical-profile-clipping",
     source_path="opendbc/car/tesla/preap/virtual_das.py",
     original=(
-      b"    pedal_di_bounded = float(clip(pedal_di_unclipped, PEDAL_DI_MIN, max_pedal_value))\n"
+      b"    pedal_di_bounded = float(clip(pedal_di_unclipped, _pedal_di_floor(), max_pedal_value))\n"
     ),
     replacement=(
-      b"    pedal_di_unclipped = float(clip(pedal_di_unclipped, PEDAL_DI_MIN, max_pedal_value))\n" +
+      b"    pedal_di_unclipped = float(clip(pedal_di_unclipped, _pedal_di_floor(), max_pedal_value))\n" +
       b"    pedal_di_bounded = pedal_di_unclipped\n"
     ),
     test_node=(
