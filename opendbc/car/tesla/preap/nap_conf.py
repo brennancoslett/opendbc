@@ -1,6 +1,7 @@
 """Tesla Pre-AP configuration: pedal calibration, radar, and control mode settings."""
 
 import json
+from math import isfinite
 import os
 import tempfile
 
@@ -318,6 +319,22 @@ class NAPConf:
   def get_accel_profile_values(self):
     return ACCEL_MAX_PROFILES.get(self.accel_profile, ACCEL_MAX_DEFAULT)
 
+  @property
+  def pedal_di_floor(self):
+    """Deepest DI the calibrated pedal can actually produce.
+
+    PEDAL_DI_MIN is a nominal constant, not a calibrated one: on a pedal
+    calibrated to calib_min 2.13 V it asks for 0.08 V, which the pedal cannot
+    emit, so every command past about DI -3.3 saturated at the same physical
+    output. Clamping to the calibrated minimum makes the controller's regen
+    authority match what the hardware will deliver, which is what the regen
+    under-delivery monitor and the feedforward's regen end both assume.
+    """
+    calibrated = self.pedal_to_di(self.pedal_calib_min)
+    if not isfinite(calibrated):
+      return float(PEDAL_DI_MIN)
+    return float(max(PEDAL_DI_MIN, calibrated))
+
   def di_to_pedal(self, val):
     return transform_di_to_pedal(val, self.pedal_zero, self.pedal_factor)
 
@@ -344,6 +361,7 @@ class NAPConf:
     print(f"    Pedal Calib Min:      {self.pedal_calib_min:.2f}")
     print(f"    Pedal Calib Max:      {self.pedal_calib_max:.2f}")
     print(f"    Pedal Zero:           {self.pedal_zero:.3f}")
+    print(f"    Pedal DI Floor:       {self.pedal_di_floor:.2f}")
     print(f"    Pedal Factor:         {self.pedal_factor:.3f}")
     print(f"    Pedal CAN Bus:        {self.pedal_can_bus}")
     print("")
