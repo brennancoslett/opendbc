@@ -9,6 +9,16 @@ PEDAL_TIMEOUT_MS = 500
 GAS_PRESSED_HYSTERESIS_DI = 1.5
 
 
+def _pedal_di_neutral() -> float:
+  """Calibrated zero-torque DI, or the nominal pressed threshold without one.
+
+  Falls back to PEDAL_DI_PRESSED when the config object carries no
+  calibration, so a partial config cannot widen the band the driver has to
+  cross to take over.
+  """
+  return float(getattr(nap_conf, "pedal_di_neutral", PEDAL_DI_PRESSED))
+
+
 class PedalFeedback:
   """Parses Comma Pedal GAS_SENSOR feedback and tracks pedal health."""
 
@@ -73,8 +83,17 @@ class PedalFeedback:
     Below the threshold the controller keeps command, so a light rest on the
     pedal no longer produces regen -- it produces whatever the planner asked
     for, bounded by the same accel envelope as any other engaged frame.
+
+    The floor is the *calibrated* neutral, not just the learner's estimate.
+    PedalZeroTorque only advances while the controller already holds the
+    pedal, so during an override it cannot learn, and early in a drive it
+    still reads its seed -- which left this threshold at PEDAL_DI_PRESSED
+    exactly on the first engagements, the ones the driver notices. Measured on
+    a drive that ran this logic: the first three hand-backs released at DI
+    0.49, -1.27 and -2.68 and pulled -121, -95 and -91 Nm, while later ones,
+    after the learner had converged, released near DI 11 and pulled -3.8.
     """
-    threshold = max(float(PEDAL_DI_PRESSED), float(zero_torque_di))
+    threshold = max(float(PEDAL_DI_PRESSED), _pedal_di_neutral(), float(zero_torque_di))
     if self._gas_pressed:
       self._gas_pressed = self.interceptor_value > threshold - GAS_PRESSED_HYSTERESIS_DI
     else:
