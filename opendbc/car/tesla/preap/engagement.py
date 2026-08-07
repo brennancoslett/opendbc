@@ -24,8 +24,12 @@ class PreAPEngagement:
 
     self.stalk_pull_time_ms = 0
     self.prev_stalk_pull_time_ms = -1000
+    self.stalk_pull_count = 0
 
     self.pedal_speed_kph = 0.0
+    # Survives disengagement on purpose: it is what a resume returns to. Only
+    # a process restart clears it.
+    self.last_set_speed_kph = 0.0
     self.longCtrlEvent = None
     self.pedal_unavailable = False
 
@@ -44,9 +48,22 @@ class PreAPEngagement:
       self.enableLongControl = False
       self.enableJustCC = True
       self.pending_enable = False
-      self.pedal_speed_kph = 0.0
+      self._clear_target_speed()
       if was_long_active:
         self.longCtrlEvent = "pccDisabled"
+
+  def _clear_target_speed(self):
+    """Drop the active target, remembering it as what a resume returns to.
+
+    Every path that gives up longitudinal goes through here, so the memory is
+    the speed that was set when control was last handed back -- which is what
+    a resume means. Capturing at engage instead would be wrong: engaging
+    records whatever the car happens to be doing, so re-engaging after slowing
+    for traffic would overwrite the very speed the driver wants back.
+    """
+    if self.pedal_speed_kph > 0.0:
+      self.last_set_speed_kph = self.pedal_speed_kph
+    self.pedal_speed_kph = 0.0
 
   def _clear_pedal_unavailable(self):
     self.pedal_unavailable = False
@@ -64,9 +81,10 @@ class PreAPEngagement:
       self.enableLongControl = False
       self.enableJustCC = False
       self.pending_enable = False
-      self.pedal_speed_kph = 0.0
+      self._clear_target_speed()
       self.stalk_pull_time_ms = 0
       self.prev_stalk_pull_time_ms = -1000
+      self.stalk_pull_count = 0
       self.pending_cancel_at_ms = 0
       self._clear_pedal_unavailable()
       if was_long_active:
@@ -105,7 +123,7 @@ class PreAPEngagement:
         if pedal_long_allowed and self.enableLongControl:
           self.pedal_speed_kph = self._capture_target_speed(v_ego, speed_units)
         else:
-          self.pedal_speed_kph = 0.0
+          self._clear_target_speed()
           if not use_pedal and di_cruise_state == "STANDBY":
             self.preap_cc_engage_needed = True
             self.preap_last_cc_spoof_ms = curr_time_ms
@@ -148,8 +166,27 @@ class PreAPEngagement:
                           use_pedal, pedal_long_allowed, long_control_allowed,
                           di_cruise_state="OFF"):
     self.prev_stalk_pull_time_ms = self.stalk_pull_time_ms
+    gap_ms = curr_time_ms - self.stalk_pull_time_ms
     self.stalk_pull_time_ms = curr_time_ms
-    double_pull = (self.stalk_pull_time_ms - self.prev_stalk_pull_time_ms) < self.double_pull_window_ms
+    double_pull = gap_ms < self.double_pull_window_ms
+
+    self.stalk_pull_count = self.stalk_pull_count + 1 if double_pull else 1
+
+    # Third pull of one burst: resume the remembered set speed instead of
+    # re-capturing the current one. The double-pull has already engaged by
+    # now, so this only retargets -- it never engages on its own.
+    #
+    # It shares double_pull_window_ms rather than getting a longer one of its
+    # own. Outside that window a lone pull means "drop to lateral", and
+    # stretching the resume window would turn a slightly-late third tap from
+    # that de-escalation into an acceleration, which is the wrong direction
+    # for a mistap to fail in.
+    #
+    # Falls through whenever a resume is unavailable, which leaves stock-CC
+    # mode -- where the DI owns the set speed, not NAP -- exactly as it was.
+    if double_pull and self.stalk_pull_count >= 3:
+      if self._resume_remembered_speed(use_pedal, pedal_long_allowed):
+        return
 
     if double_pull:
       self.pending_cancel_at_ms = 0
@@ -164,7 +201,7 @@ class PreAPEngagement:
         self.longCtrlEvent = "pccEnabled"
         self.pedal_speed_kph = self._capture_target_speed(v_ego, speed_units)
       else:
-        self.pedal_speed_kph = 0.0
+        self._clear_target_speed()
         # Always fire engage_needed on a no-pedal double-pull. The first pull
         # already fired an immediate cancel; even if di_cruise_state still
         # reads ENABLED at this frame (CAN lag — DI hasn't observed the cancel
@@ -180,7 +217,7 @@ class PreAPEngagement:
       self.cruiseEnabled = True
       self.enableLongControl = False
       self.enableJustCC = True
-      self.pedal_speed_kph = 0.0
+      self._clear_target_speed()
       self.pending_enable = True
       if was_long_active:
         self.longCtrlEvent = "pccDisabled"
@@ -194,6 +231,24 @@ class PreAPEngagement:
       if not use_pedal:
         self.preap_cc_cancel_needed = True
         self.preap_last_cc_spoof_ms = curr_time_ms
+
+  def _resume_remembered_speed(self, use_pedal, pedal_long_allowed):
+    """Retarget to the last set speed. Returns whether it applied.
+
+    A plain double-pull captures the speed the car happens to be doing, which
+    is the wrong target after slowing for traffic or an exit -- the driver
+    wants the speed they had set, not the one they were dragged down to. This
+    only makes sense where NAP owns the target: in stock-CC mode the DI holds
+    its own set speed and does its own resume.
+    """
+    if not (use_pedal and pedal_long_allowed and self.enableLongControl):
+      return False
+    if self.last_set_speed_kph <= 0.0:
+      return False
+    carlog.debug("STALK triple-pull — resuming %.1f kph (was %.1f)",
+                 self.last_set_speed_kph, self.pedal_speed_kph)
+    self.pedal_speed_kph = self.last_set_speed_kph
+    return True
 
   def _make_button_event(self, cruise_buttons, prev_cruise_buttons, curr_time_ms,
                          v_ego, speed_units, use_pedal):
@@ -220,9 +275,10 @@ class PreAPEngagement:
         self.enableLongControl = False
         self.enableJustCC = False
         self.pending_enable = False
-        self.pedal_speed_kph = 0.0
+        self._clear_target_speed()
         self.stalk_pull_time_ms = 0
         self.prev_stalk_pull_time_ms = -1000
+        self.stalk_pull_count = 0
         self.pending_cancel_at_ms = 0
         self._clear_pedal_unavailable()
         if was_long_active:
