@@ -37,14 +37,34 @@ class PedalZeroTorque:
   """Learns the pedal DI position that produces zero motor torque."""
 
   def __init__(self):
-    self.value = PEDAL_DI_ZERO  # start at coast, refine from real data
-    self._target = PEDAL_DI_ZERO
+    # Seeded lazily from the pedal calibration, not eagerly: this class has a
+    # module-level singleton built at import time, which can precede params
+    # being readable, and a seed that fell back to PEDAL_DI_ZERO there would
+    # stick for the whole drive.
+    self.value = None
+    self._target = None
     self._best_torque = TORQUE_LEVEL_DECEL
     self._settled_updates = 0
+
+  def _ensure_seeded(self):
+    """Start at the calibrated zero-torque DI rather than PEDAL_DI_ZERO.
+
+    PEDAL_DI_ZERO is 0, but this car does not stop regenerating until about
+    DI 12, and the learner only advances while the controller already holds
+    the pedal. Seeding at 0 therefore meant every drive opened with the
+    acquisition seed (`prev_pedal_di`) and the feedforward anchored roughly 12
+    DI into regen, and stayed there until the learner happened to catch a
+    settled coast -- about 100 s into a measured drive.
+    """
+    if self.value is None:
+      seed = float(getattr(nap_conf, "pedal_di_neutral", PEDAL_DI_ZERO))
+      self.value = seed
+      self._target = seed
 
   def update(self, torque_level: float, current_pedal_di: float, v_ego: float, *,
              control_active: bool, accel_command: float):
     """Call every pedal frame with the current motor torque and pedal position."""
+    self._ensure_seeded()
     observation_valid = (
       control_active
       and all(isfinite(value) for value in (torque_level, current_pedal_di, v_ego, accel_command))
@@ -76,7 +96,13 @@ class PedalZeroTorque:
       ))
 
   def get(self, v_ego: float) -> float:
-    """Returns the zero-torque DI value. Falls back to DI=0 at low speed."""
+    """Returns the zero-torque DI value. Falls back to DI=0 at low speed.
+
+    The low-speed fallback stays at PEDAL_DI_ZERO deliberately: the learner
+    only observes above 10 mph, and creep torque makes the crossing below
+    walking pace a different quantity than the one measured here.
+    """
+    self._ensure_seeded()
     if v_ego < 5.0 * CV.MPH_TO_MS:
       return PEDAL_DI_ZERO
     return self.value
