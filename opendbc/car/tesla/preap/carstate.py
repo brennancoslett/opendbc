@@ -8,6 +8,7 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_THRESHOLD
 from opendbc.car.tesla.preap.nap_params import NAPParamKeys
 from opendbc.car.tesla.preap.nap_conf import nap_conf, PEDAL_DI_PRESSED
+from opendbc.car.tesla.pedal.controller import get_zero_torque
 
 try:
   from openpilot.common.params import Params as _NAPParams
@@ -171,6 +172,9 @@ def update_preap(cs, can_parsers):
   cs.pedal_timeout = cs.pedal.timeout
 
   if nap_conf.use_pedal:
+    # The override threshold tracks the learned zero-torque position, so it is
+    # resolved here where the speed the learner is keyed on is available.
+    cs.pedal.update_gas_pressed(get_zero_torque().get(ret.vEgo))
     ret.gasPressed = cs.pedal.gas_pressed
 
   cs.das_control = None
