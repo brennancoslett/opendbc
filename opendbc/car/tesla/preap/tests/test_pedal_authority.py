@@ -779,7 +779,11 @@ def test_max_regen_does_not_prompt_when_requested_decel_is_delivered(controller_
     max_regen_prompted |= cs.pccEvent == "pedalMaxRegen"
 
   assert controller.vdas.jerk_limiter.a_limited == pytest.approx(cc.actuators.accel)
-  assert controller.prev_pedal_di < -4.75
+  # Near the rail, not a fixed point: the modeled plant tracks the command
+  # exactly, so the error reaches zero and the inner integral simply holds
+  # whatever the ramp accumulated. Filtering the jerk estimate changes that
+  # transient and so the converged trim, by about 0.01 DI.
+  assert controller.prev_pedal_di < -4.7
   assert not max_regen_prompted
 
 
