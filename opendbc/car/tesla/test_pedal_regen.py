@@ -114,10 +114,25 @@ class TestPedalRateLimiter(unittest.TestCase):
     self.assertAlmostEqual(prev_di, TC_PEDAL_DI_MIN)
 
   def test_neutral_accel(self):
-    """accel_request = 0.0 -> pedal near zero (coast)."""
-    result, _ = compute_pedal_command(0.0, v_ego=10.0, prev_pedal_di=0.0)
-    zero_pedal = nap_conf.di_to_pedal(0.0)
-    self.assertAlmostEqual(result, zero_pedal, places=4)
+    """accel_request = 0.0 -> pedal moves toward zero *torque*, not toward DI 0.
+
+    This used to assert DI 0, on the assumption that DI 0 is where the car
+    coasts. It is not: the drive unit keeps regenerating up to about DI 12, so
+    commanding 0 for a zero-acceleration request asked for roughly -1 m/s2.
+    The command is rate-limited, so one step only gets partway there -- what
+    matters is that it climbs toward neutral instead of sitting at DI 0.
+    """
+    neutral_di = nap_conf.pedal_di_neutral
+    self.assertGreater(neutral_di, PEDAL_RAMP_RATE_UP,
+                       "test assumes neutral is more than one step away")
+
+    _, new_di = compute_pedal_command(0.0, v_ego=10.0, prev_pedal_di=0.0)
+    self.assertAlmostEqual(new_di, PEDAL_RAMP_RATE_UP, places=4)
+
+    prev_di = 0.0
+    for _ in range(50):
+      _, prev_di = compute_pedal_command(0.0, v_ego=10.0, prev_pedal_di=prev_di)
+    self.assertAlmostEqual(prev_di, neutral_di, places=4)
 
   def test_positive_accel_is_positive(self):
     """accel_request = 1.0 -> pedal above zero."""

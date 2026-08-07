@@ -18,6 +18,7 @@ from opendbc.car.tesla.preap.pedal_feedback import PedalFeedback
 from opendbc.car.tesla.preap.teslacan import GAS_COMMAND_ID, PEDAL_D, PEDAL_M1, TeslaCANPreAP
 from opendbc.car.tesla.pedal.controller import (
   PEDAL_RAMP_RATE_UP,
+  ZERO_TORQUE_ADAPT_RATE,
   PedalZeroTorque,
 )
 
@@ -36,6 +37,11 @@ def _zero_torque():
     get=lambda _v_ego: PEDAL_DI_ZERO,
     update=lambda *_args, **_kwargs: None,
   )
+
+
+def _one_adapt_step(value, target):
+  """Where the anchor lands after one accepted observation, from any seed."""
+  return min(max(target, value - ZERO_TORQUE_ADAPT_RATE), value + ZERO_TORQUE_ADAPT_RATE)
 
 
 @pytest.fixture
@@ -654,7 +660,11 @@ def test_zero_torque_anchor_converges_without_a_command_step():
       control_active=True,
       accel_command=0.0,
     )
-  assert zero_torque.value == pytest.approx(PEDAL_DI_ZERO)
+  # Assertions are relative to the seed, not to PEDAL_DI_ZERO: the anchor now
+  # starts at the calibrated zero-torque DI, so a literal here would only be
+  # testing whatever calibration the test environment happens to carry.
+  seed = zero_torque.get(17.0)
+  assert zero_torque.value == pytest.approx(seed)
 
   zero_torque.update(
     torque_level=-0.5,
@@ -663,7 +673,7 @@ def test_zero_torque_anchor_converges_without_a_command_step():
     control_active=True,
     accel_command=0.0,
   )
-  assert zero_torque.value == pytest.approx(0.1)
+  assert zero_torque.value == pytest.approx(_one_adapt_step(seed, 6.0))
 
   for _ in range(100):
     zero_torque.update(
@@ -678,6 +688,7 @@ def test_zero_torque_anchor_converges_without_a_command_step():
 
 def test_zero_torque_anchor_ignores_inactive_pedal_feedback():
   zero_torque = PedalZeroTorque()
+  seed = zero_torque.get(17.0)
 
   for _ in range(100):
     zero_torque.update(
@@ -688,7 +699,7 @@ def test_zero_torque_anchor_ignores_inactive_pedal_feedback():
       accel_command=0.0,
     )
 
-  assert zero_torque.value == pytest.approx(PEDAL_DI_ZERO)
+  assert zero_torque.value == pytest.approx(seed)
 
 
 @pytest.mark.parametrize(
@@ -697,6 +708,7 @@ def test_zero_torque_anchor_ignores_inactive_pedal_feedback():
 )
 def test_zero_torque_anchor_freezes_across_invalid_observations(control_active, accel_command):
   zero_torque = PedalZeroTorque()
+  seed = zero_torque.get(17.0)
 
   for _ in range(25):
     zero_torque.update(
@@ -707,7 +719,7 @@ def test_zero_torque_anchor_freezes_across_invalid_observations(control_active, 
       accel_command=0.0,
     )
   frozen_value = zero_torque.value
-  assert frozen_value == pytest.approx(0.1)
+  assert frozen_value == pytest.approx(_one_adapt_step(seed, 6.0))
 
   for _ in range(100):
     zero_torque.update(
@@ -737,12 +749,13 @@ def test_zero_torque_anchor_freezes_across_invalid_observations(control_active, 
     control_active=True,
     accel_command=0.0,
   )
-  assert zero_torque.value == pytest.approx(frozen_value + 0.1)
+  assert zero_torque.value == pytest.approx(_one_adapt_step(frozen_value, 6.0))
 
 
 def test_acceleration_trace_cannot_reanchor_zero_torque_or_hit_backstop(controller_env, monkeypatch):
   controller, cc, cs, tesla_can = controller_env
   zero_torque = PedalZeroTorque()
+  seed = zero_torque.get(17.0)
   monkeypatch.setattr('opendbc.car.tesla.preap.carcontroller.get_zero_torque', lambda: zero_torque)
   monkeypatch.setattr('opendbc.car.tesla.preap.virtual_das.get_zero_torque', lambda: zero_torque)
 
@@ -759,7 +772,7 @@ def test_acceleration_trace_cannot_reanchor_zero_torque_or_hit_backstop(controll
     first >= PEDAL_RAMP_RATE_UP - 0.1 and second >= PEDAL_RAMP_RATE_UP - 0.1
     for first, second in zip(command_steps, command_steps[1:], strict=False)
   )
-  assert zero_torque.value == pytest.approx(PEDAL_DI_ZERO)
+  assert zero_torque.value == pytest.approx(seed)
   assert not consecutive_backstop_steps
 
 
