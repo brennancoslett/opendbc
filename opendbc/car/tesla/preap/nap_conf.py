@@ -40,8 +40,16 @@ DEFAULT_CONFIG = {
 
 # Pedal DI (Driver Intent) constants — internal representation before calibration
 PEDAL_DI_MIN = -5       # Max regen (coasting hard)
-PEDAL_DI_ZERO = 0       # Neutral
+PEDAL_DI_ZERO = 0       # Neutral *in the nominal model*, not on the car
 PEDAL_DI_PRESSED = 2    # "pedal pressed" threshold
+
+# Fraction of calibrated pedal travel at which the drive unit stops asking for
+# regen and starts asking for propulsion. Measured by regressing
+# DI_torqueMotor on the DI actually reaching the drive unit over a six-minute
+# drive: the crossing sits at DI 10.50 / 11.94 / 12.20 in the 5-12, 12-20 and
+# 20-28 m/s bands, i.e. about DI 12 -- roughly 12 above what PEDAL_DI_ZERO
+# claims. Everything below it is regen.
+PEDAL_NEUTRAL_TRAVEL_FRAC = 0.1455
 
 ACCEL_MAX = 2.5         # m/s^2
 REGEN_MAX = -1.5        # m/s^2
@@ -334,6 +342,27 @@ class NAPConf:
     if not isfinite(calibrated):
       return float(PEDAL_DI_MIN)
     return float(max(PEDAL_DI_MIN, calibrated))
+
+  @property
+  def pedal_di_neutral(self):
+    """DI at which the drive unit produces no motor torque.
+
+    PEDAL_DI_ZERO is 0, which is where a nominal pedal coasts, not where this
+    one does: everything from 0 up to about DI 12 is a regen request. Anything
+    asking "is the driver requesting propulsion" or "where should the
+    controller start commanding" needs this, not PEDAL_DI_ZERO.
+
+    Stored as a fraction of calibrated travel rather than a DI because
+    recalibrating rescales DI, and a hard-coded DI would silently become wrong
+    the next time the pedal is calibrated.
+    """
+    span = self.pedal_calib_max - self.pedal_calib_min
+    if not isfinite(span) or span <= 0:
+      return float(PEDAL_DI_ZERO)
+    neutral = self.pedal_to_di(self.pedal_calib_min + PEDAL_NEUTRAL_TRAVEL_FRAC * span)
+    if not isfinite(neutral):
+      return float(PEDAL_DI_ZERO)
+    return float(max(PEDAL_DI_ZERO, neutral))
 
   def di_to_pedal(self, val):
     return transform_di_to_pedal(val, self.pedal_zero, self.pedal_factor)
