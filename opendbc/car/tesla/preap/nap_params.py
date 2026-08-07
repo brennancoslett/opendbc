@@ -31,6 +31,9 @@ class NAPParamKeys:
   IBOOSTER_ENABLED = "NAPiBoosterEnabled"
   BRAKE_FACTOR = "NAPBrakeFactor"
 
+  # Display
+  ALWAYS_SHOW_MAX_SPEED = "NAPAlwaysShowMaxSpeed"
+
   # Advanced
   FORCE_PRE_AP = "NAPForcePreAP"
 
@@ -52,5 +55,6 @@ DEFAULTS = {
   NAPParamKeys.RADAR_OFFSET: 0.0,
   NAPParamKeys.IBOOSTER_ENABLED: False,
   NAPParamKeys.BRAKE_FACTOR: 1.0,
+  NAPParamKeys.ALWAYS_SHOW_MAX_SPEED: False,
   NAPParamKeys.FORCE_PRE_AP: False,
 }
