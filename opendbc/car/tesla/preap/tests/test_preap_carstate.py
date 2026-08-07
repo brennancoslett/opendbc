@@ -135,6 +135,45 @@ class TestPreAPCarStateUpdate(unittest.TestCase):
         self.assertAlmostEqual(CS.vEgoCluster, digital_speed * conversion, places=5)
         self.assertAlmostEqual(CS.cruiseState.speed, cruise_set * conversion, places=5)
 
+  def test_cluster_set_speed_is_held_while_a_stalk_burst_resolves(self):
+    """The MAX box must not flicker through the stalk FSM's provisional steps.
+
+    cruiseState.speed is the control target and moves with every step; only
+    the cluster value is held, so the planner is never handed a stale target.
+    """
+    CI = self._make_interface()
+    CI.update([])
+    engagement = CI.CS.engagement
+
+    def step(speed_kph, long_active):
+      """Apply an FSM state and let it reach cruiseState.
+
+      carstate bridges the FSM into `cs` after it has already computed
+      cruiseState.speed, so a change takes two updates to surface.
+      """
+      engagement.pedal_speed_kph = speed_kph
+      engagement.enableLongControl = long_active
+      CI.update([])
+      return CI.update([])
+
+    with patch.object(type(nap_conf), "use_pedal", new_callable=PropertyMock, return_value=True):
+      settled = step(100.0, True).cruiseState.speedCluster
+      self.assertAlmostEqual(settled, 100.0 * CV.KPH_TO_MS, places=5)
+
+      # Mid-burst the target collapses, but the cluster keeps the old reading.
+      with patch.object(engagement, "stalk_burst_active", return_value=True):
+        CS = step(0.0, False)
+        self.assertAlmostEqual(CS.cruiseState.speedCluster, settled, places=5)
+
+        CS = step(45.0, True)
+        self.assertAlmostEqual(CS.cruiseState.speedCluster, settled, places=5)
+        self.assertAlmostEqual(CS.cruiseState.speed, 45.0 * CV.KPH_TO_MS, places=5,
+                               msg="control target must still follow the FSM")
+
+      # Burst over: the resolved value goes up.
+      CS = step(100.0, True)
+      self.assertAlmostEqual(CS.cruiseState.speedCluster, 100.0 * CV.KPH_TO_MS, places=5)
+
   def test_turn_signal_stalk_state_uses_lever_level(self):
     for lever, expected in ((0, 0), (1, 1), (2, 2), (3, 0)):
       with self.subTest(lever=lever):

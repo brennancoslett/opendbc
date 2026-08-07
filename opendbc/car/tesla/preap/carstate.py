@@ -160,6 +160,20 @@ def update_preap(cs, can_parsers):
   cs.enableJustCC = cs.engagement.enableJustCC
   cs.pedal_speed_kph = cs.engagement.pedal_speed_kph
   cs.longCtrlEvent = cs.engagement.longCtrlEvent
+
+  # cruiseState.speed is the control target and follows every step of the stalk
+  # FSM immediately. What the driver reads must not: one burst walks through
+  # provisional states -- the first pull drops longitudinal so the set speed
+  # falls back to the stock-CC value, the second re-targets to the current
+  # speed, a third resumes the remembered one -- which puts three different
+  # numbers in the MAX box inside 400 ms. Hold the displayed value until the
+  # burst settles. Only the cluster field is held, so the planner still gets
+  # each resolved target with no delay.
+  if use_pedal and cs.engagement.stalk_burst_active(curr_time_ms) and cs.display_set_speed > 0.0:
+    ret.cruiseState.speedCluster = cs.display_set_speed
+  else:
+    cs.display_set_speed = ret.cruiseState.speed
+    ret.cruiseState.speedCluster = ret.cruiseState.speed
   cs.preap_cc_cancel_needed = cs.engagement.preap_cc_cancel_needed
   cs.preap_cc_engage_needed = cs.engagement.preap_cc_engage_needed
 

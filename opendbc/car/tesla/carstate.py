@@ -60,6 +60,9 @@ class CarState(CarStateBase):
       self.enableLongControl = False
       self.enableJustCC = False
       self.pedal_speed_kph = 0.0
+      # Last set speed shown on the cluster. Held across a stalk burst so the
+      # MAX box does not display the FSM's provisional steps.
+      self.display_set_speed = 0.0
       self.longCtrlEvent = None
       self.preap_cc_cancel_needed = False
       self.preap_cc_engage_needed = False
