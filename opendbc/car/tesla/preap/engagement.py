@@ -232,6 +232,18 @@ class PreAPEngagement:
         self.preap_cc_cancel_needed = True
         self.preap_last_cc_spoof_ms = curr_time_ms
 
+  def stalk_burst_active(self, curr_time_ms):
+    """Whether a run of stalk pulls is still resolving.
+
+    Spans the first pull to the close of the double-pull window, which is
+    exactly the period in which the target is provisional: the first pull has
+    dropped longitudinal, a second would re-target to the current speed, and a
+    third would resume the remembered one.
+    """
+    if not self.stalk_pull_time_ms:
+      return False
+    return (curr_time_ms - self.stalk_pull_time_ms) < self.double_pull_window_ms
+
   def _resume_remembered_speed(self, use_pedal, pedal_long_allowed):
     """Retarget to the last set speed. Returns whether it applied.
 

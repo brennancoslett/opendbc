@@ -129,6 +129,59 @@ class TestTriplePullResume(unittest.TestCase):
     self._pull(eng, t + 200, slow)
     self.assertAlmostEqual(eng.pedal_speed_kph, adjusted, places=3)
 
+  def test_burst_is_reported_active_only_while_the_target_is_provisional(self):
+    """What carstate holds the cluster value on.
+
+    The window must cover every pull of a burst and close afterwards,
+    otherwise the MAX box either flickers through the FSM's provisional steps
+    or freezes on a stale number.
+    """
+    eng = self._make_engagement()
+    v = 50.0 / CV.MS_TO_KPH
+    self.assertFalse(eng.stalk_burst_active(0), "no pull yet")
+
+    self._pull(eng, 1000, v)
+    self.assertTrue(eng.stalk_burst_active(1000))
+    self.assertTrue(eng.stalk_burst_active(1000 + WINDOW_MS - 1))
+    self.assertFalse(eng.stalk_burst_active(1000 + WINDOW_MS))
+
+    # Each further pull re-arms the hold for the rest of the burst.
+    self._pull(eng, 1200, v)
+    self.assertTrue(eng.stalk_burst_active(1200 + WINDOW_MS - 1))
+    self._pull(eng, 1400, v)
+    self.assertTrue(eng.stalk_burst_active(1400 + WINDOW_MS - 1))
+    self.assertFalse(eng.stalk_burst_active(1400 + WINDOW_MS))
+
+  def test_burst_covers_every_step_the_target_moves_through(self):
+    """The whole triple-pull sequence must sit inside one hold.
+
+    This is the flicker the hold exists to suppress: engaged at 100, the three
+    pulls drive the target to 0, then to the current speed, then back to 100.
+    """
+    eng = self._make_engagement()
+    fast = 100.0 / CV.MS_TO_KPH
+    self._engage_at(eng, fast)
+
+    eng.process_buttons(
+      cruise_buttons=IDLE, prev_cruise_buttons=IDLE, curr_time_ms=5000,
+      v_ego=fast, speed_units="KPH", use_pedal=True, pedal_long_allowed=True,
+      long_control_allowed=True, real_brake_pressed=True)
+
+    slow = 45.0 / CV.MS_TO_KPH
+    seen = []
+    for i, t in enumerate((9000, 9200, 9400)):
+      self._pull(eng, t, slow)
+      seen.append((eng.pedal_speed_kph, eng.stalk_burst_active(t + 20)))
+      if i:
+        self.assertTrue(eng.stalk_burst_active(t + 20))
+
+    targets = [speed for speed, _ in seen]
+    self.assertEqual(targets[0], 0.0, "first pull drops the target")
+    self.assertAlmostEqual(targets[1], 45.0, places=0, msg="second captures current")
+    self.assertAlmostEqual(targets[2], 100.0, places=0, msg="third resumes")
+    self.assertTrue(all(active for _, active in seen),
+                    "every step must fall inside one hold")
+
   def test_stock_cc_mode_is_untouched(self):
     """Without the pedal the DI owns the set speed and does its own resume."""
     eng = self._make_engagement()
