@@ -19,7 +19,7 @@ from opendbc.car.tesla.preap.constants import (
   VDAS_AEGO_FILTER_RC,
   VDAS_ACCEL_JERK_MAX, VDAS_DECEL_JERK_MAX, VDAS_ACCEL_SNAP_MAX,
   VDAS_ZERO_TORQUE_TRANSITION_WIDTH,
-  VDAS_EGO_JERK_MAX,
+  VDAS_EGO_JERK_MAX, VDAS_EGO_JERK_FILTER_RC,
 )
 from opendbc.car.tesla.preap.ff_table_default import (
   SPEED_BP as FF_SPEED_BP,
@@ -442,6 +442,7 @@ class VirtualDAS:
       rate=1.0 / dt,
     )
     self.a_ego_filter = FirstOrderFilter(0.0, VDAS_AEGO_FILTER_RC, dt)
+    self.j_ego_filter = FirstOrderFilter(0.0, VDAS_EGO_JERK_FILTER_RC, dt)
     self.prev_a_ego_filtered = 0.0
     self.a_ego_initialized = False
     self.pedal_ramp_limited_up = False
@@ -490,13 +491,7 @@ class VirtualDAS:
       effort_max,
     ))
 
-    a_ego_filtered = self.a_ego_filter.update(a_ego)
-    self.a_ego_initialized = True
-    j_ego = float(clip(
-      (a_ego_filtered - self.prev_a_ego_filtered) / self.dt,
-      -VDAS_EGO_JERK_MAX, VDAS_EGO_JERK_MAX,
-    ))
-    self.prev_a_ego_filtered = a_ego_filtered
+    a_ego_filtered, j_ego = self._track_measured_accel(a_ego)
 
     future_t = float(interp(v_ego, VDAS_FUTURE_T_BP, VDAS_FUTURE_T_V))
     a_ego_future = a_ego_filtered + j_ego * future_t
@@ -572,12 +567,25 @@ class VirtualDAS:
     self.prev_pedal_di = pedal_di
     return pedal_di
 
+  def _track_measured_accel(self, a_ego: float) -> tuple[float, float]:
+    """Advance the measured-acceleration and jerk estimators one step.
+
+    Called from both the control path and observe() so the jerk estimate is
+    never stale after a spell without authority.
+    """
+    a_ego_filtered = self.a_ego_filter.update(a_ego)
+    j_ego = float(self.j_ego_filter.update(float(clip(
+      (a_ego_filtered - self.prev_a_ego_filtered) / self.dt,
+      -VDAS_EGO_JERK_MAX, VDAS_EGO_JERK_MAX,
+    ))))
+    self.prev_a_ego_filtered = a_ego_filtered
+    self.a_ego_initialized = True
+    return a_ego_filtered, j_ego
+
   def observe(self, a_ego: float, orientation_ned: list | None = None):
     """Keep measured acceleration and grade state current without authority."""
     self.grade_estimator.update(orientation_ned if orientation_ned is not None else [])
-    a_ego_filtered = self.a_ego_filter.update(a_ego)
-    self.prev_a_ego_filtered = a_ego_filtered
-    self.a_ego_initialized = True
+    self._track_measured_accel(a_ego)
     self.inner_pid.reset()
     self._reset_negative_handoff()
     self._reset_persistent_error()
@@ -597,6 +605,7 @@ class VirtualDAS:
     if not preserve_grade or not self.a_ego_initialized:
       self.a_ego_filter.x = measured_accel
       self.prev_a_ego_filtered = measured_accel
+      self.j_ego_filter.x = 0.0
     self.a_ego_initialized = True
     self.prev_pedal_di = pedal_di_init
     self.pedal_ramp_limited_up = False

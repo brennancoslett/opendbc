@@ -12,7 +12,7 @@ from opendbc.car.tesla.preap.ff_table_default import (
   DEFAULT_TABLE as FF_DEFAULT_TABLE,
 )
 from opendbc.car.tesla.preap.constants import (
-  VDAS_EGO_JERK_MAX, VDAS_FUTURE_T_BP, VDAS_FUTURE_T_V,
+  VDAS_EGO_JERK_MAX, VDAS_EGO_JERK_FILTER_RC, VDAS_FUTURE_T_BP, VDAS_FUTURE_T_V,
 )
 from opendbc.car.tesla.preap.virtual_das import FeedforwardModel, JerkLimiter, VirtualDAS
 from opendbc.car.tesla.preap.nap_conf import (
@@ -771,8 +771,15 @@ class TestInnerPID:
     )
 
     future_time_s = float(np.interp(15.0, VDAS_FUTURE_T_BP, VDAS_FUTURE_T_V))
-    expected_future_accel_mps2 = vdas.a_ego_filter.x + VDAS_EGO_JERK_MAX * future_time_s
+    # The clamp bounds the derivative, then the jerk low-pass admits only its
+    # first-order share of a one-frame step, so a spike reaches the prediction
+    # attenuated rather than at the full clamp.
+    jerk_filter_alpha = vdas.dt / (VDAS_EGO_JERK_FILTER_RC + vdas.dt)
+    expected_jerk_mps3 = VDAS_EGO_JERK_MAX * jerk_filter_alpha
+    expected_future_accel_mps2 = vdas.a_ego_filter.x + expected_jerk_mps3 * future_time_s
     expected_trim_mps2 = -expected_future_accel_mps2 * vdas.inner_pid.k_i * vdas.dt
+    assert vdas.j_ego_filter.x == pytest.approx(expected_jerk_mps3)
+    assert expected_jerk_mps3 < VDAS_EGO_JERK_MAX
     assert vdas.inner_pid.i == pytest.approx(expected_trim_mps2)
     assert feedforward_inputs_mps2 == pytest.approx([expected_trim_mps2])
 

@@ -61,13 +61,11 @@ MUTATIONS = (
     name="observation-rewrites-command-state",
     source_path="opendbc/car/tesla/preap/virtual_das.py",
     original=(
-      b"    self.prev_a_ego_filtered = a_ego_filtered\n" +
-      b"    self.a_ego_initialized = True\n" +
+      b"    self._track_measured_accel(a_ego)\n" +
       b"    self.inner_pid.reset()\n"
     ),
     replacement=(
-      b"    self.prev_a_ego_filtered = a_ego_filtered\n" +
-      b"    self.a_ego_initialized = True\n" +
+      b"    self._track_measured_accel(a_ego)\n" +
       b"    self.jerk_limiter.reset(a_ego)\n" +
       b"    self.inner_pid.reset()\n"
     ),
@@ -249,13 +247,10 @@ MUTATIONS = (
     name="steady-grade-subtracted-from-net-feedback",
     source_path="opendbc/car/tesla/preap/virtual_das.py",
     original=(
-      b"    a_ego_filtered = self.a_ego_filter.update(a_ego)\n" +
-      b"    self.a_ego_initialized = True\n"
+      b"    a_ego_filtered, j_ego = self._track_measured_accel(a_ego)\n"
     ),
     replacement=(
-      b"    a_ego_corrected = a_ego - steady_grade_compensation\n" +
-      b"    a_ego_filtered = self.a_ego_filter.update(a_ego_corrected)\n" +
-      b"    self.a_ego_initialized = True\n"
+      b"    a_ego_filtered, j_ego = self._track_measured_accel(a_ego - steady_grade_compensation)\n"
     ),
     test_node=(
       "opendbc/car/tesla/preap/tests/test_vdas_grade_control.py::" +

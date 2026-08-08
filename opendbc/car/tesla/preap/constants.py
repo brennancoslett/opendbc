@@ -57,3 +57,12 @@ VDAS_ZERO_TORQUE_TRANSITION_WIDTH = 0.25  # m/s² on each side of zero
 # This limits one-frame sensor/source discontinuities without constraining the
 # tighter acceleration-command jerk limits above.
 VDAS_EGO_JERK_MAX = 5.0  # m/s³
+
+# Low-pass on the measured jerk estimate feeding the delay prediction.
+# Differentiating the filtered acceleration at 50 Hz undoes the filter: the
+# high-frequency gain of a_ego_filtered + j_ego * future_t on raw a_ego is
+# 1 + future_t / (VDAS_AEGO_FILTER_RC + dt), which is 3.0x at highway speed --
+# the prediction amplified IMU noise instead of smoothing it. Filtering j_ego
+# scales that excess by dt / (RC + dt), bringing the gain to about 1.13x while
+# a sustained jerk still passes at full amplitude.
+VDAS_EGO_JERK_FILTER_RC = 0.30  # seconds
