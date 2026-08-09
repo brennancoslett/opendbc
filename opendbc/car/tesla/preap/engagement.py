@@ -13,9 +13,11 @@ SPOOF_ECHO_WINDOW_MS = 300
 class PreAPEngagement:
   """Pre-AP engagement FSM: double-pull detection, target speed, brake override, CC spoof flags."""
 
-  def __init__(self, double_pull_enabled, double_pull_window_ms):
+  def __init__(self, double_pull_enabled, double_pull_window_ms,
+               map_speed_pull_count=4):
     self.enableDoublePull = double_pull_enabled
     self.double_pull_window_ms = double_pull_window_ms
+    self.map_speed_pull_count = map_speed_pull_count
 
     self.cruiseEnabled = False
     self.enableLongControl = False
@@ -31,6 +33,8 @@ class PreAPEngagement:
     # a process restart clears it.
     self.last_set_speed_kph = 0.0
     self.longCtrlEvent = None
+    # Single-frame result of a map-speed pull, published as a carState flag.
+    self.map_speed_event = None
     self.pedal_unavailable = False
 
     self.preap_cc_cancel_needed = False
@@ -93,7 +97,8 @@ class PreAPEngagement:
 
   def process_buttons(self, cruise_buttons, prev_cruise_buttons, curr_time_ms,
                       v_ego, speed_units, use_pedal, pedal_long_allowed,
-                      long_control_allowed, real_brake_pressed, di_cruise_state="OFF"):
+                      long_control_allowed, real_brake_pressed, di_cruise_state="OFF",
+                      map_speed_target_kph=0.0):
     button_events = []
     long_control_allowed = long_control_allowed and (not use_pedal or not real_brake_pressed)
 
@@ -102,6 +107,7 @@ class PreAPEngagement:
     # are produced.
     self.preap_cc_cancel_needed = False
     self.preap_cc_engage_needed = False
+    self.map_speed_event = None
 
     # MAIN button: rising edge only
     if cruise_buttons == CruiseButtons.MAIN and prev_cruise_buttons != CruiseButtons.MAIN:
@@ -111,7 +117,7 @@ class PreAPEngagement:
       if self.enableDoublePull:
         self._handle_double_pull(curr_time_ms, v_ego, speed_units,
                                  use_pedal, pedal_long_allowed, long_control_allowed,
-                                 di_cruise_state)
+                                 di_cruise_state, map_speed_target_kph)
       else:
         carlog.debug("STALK single-pull engage — full control")
         self.cruiseEnabled = True
@@ -164,7 +170,7 @@ class PreAPEngagement:
 
   def _handle_double_pull(self, curr_time_ms, v_ego, speed_units,
                           use_pedal, pedal_long_allowed, long_control_allowed,
-                          di_cruise_state="OFF"):
+                          di_cruise_state="OFF", map_speed_target_kph=0.0):
     self.prev_stalk_pull_time_ms = self.stalk_pull_time_ms
     gap_ms = curr_time_ms - self.stalk_pull_time_ms
     self.stalk_pull_time_ms = curr_time_ms
@@ -184,6 +190,15 @@ class PreAPEngagement:
     #
     # Falls through whenever a resume is unavailable, which leaves stock-CC
     # mode -- where the DI owns the set speed, not NAP -- exactly as it was.
+    # Fourth pull: take the MCU's map speed limit plus the driver's offset.
+    # It sits above the resume rather than replacing it because the two answer
+    # different questions -- resume returns the speed you chose, this proposes
+    # the one the road is posted at. Checked first so a fourth tap is never
+    # swallowed by the third's behaviour.
+    if double_pull and self.stalk_pull_count >= self.map_speed_pull_count:
+      if self._apply_map_speed_limit(use_pedal, pedal_long_allowed, map_speed_target_kph):
+        return
+
     if double_pull and self.stalk_pull_count >= 3:
       if self._resume_remembered_speed(use_pedal, pedal_long_allowed):
         return
@@ -260,6 +275,31 @@ class PreAPEngagement:
     carlog.debug("STALK triple-pull — resuming %.1f kph (was %.1f)",
                  self.last_set_speed_kph, self.pedal_speed_kph)
     self.pedal_speed_kph = self.last_set_speed_kph
+    return True
+
+  def _apply_map_speed_limit(self, use_pedal, pedal_long_allowed, map_speed_target_kph):
+    """Retarget to the map speed limit plus offset. Returns whether it applied.
+
+    Same ownership guard as the resume: in stock-CC mode the DI holds the set
+    speed and NAP has nothing to write.
+
+    With no usable limit this still consumes the gesture and reports why. The
+    alternative -- falling through to the third-pull resume -- would answer a
+    request for the posted speed with an unrelated one, and the driver would
+    have no way to tell which of the two they got.
+    """
+    if not (use_pedal and pedal_long_allowed and self.enableLongControl):
+      return False
+
+    if map_speed_target_kph <= 0.0:
+      carlog.debug("STALK map-speed pull — no usable limit")
+      self.map_speed_event = "mapSpeedUnavailable"
+      return True
+
+    carlog.debug("STALK map-speed pull — %.1f kph (was %.1f)",
+                 map_speed_target_kph, self.pedal_speed_kph)
+    self.pedal_speed_kph = min(map_speed_target_kph, 270.0)
+    self.map_speed_event = "mapSpeedApplied"
     return True
 
   def _make_button_event(self, cruise_buttons, prev_cruise_buttons, curr_time_ms,

@@ -221,6 +221,9 @@ struct CarState {
   vdasLimitedAccel @74 :Float32;  # NAP: jerk-limited VDAS acceleration command
   pedalCommandDi @75 :Float32;  # NAP: controller DI-domain command/seed; RESET wire frames carry zero
   pedalAuthorityFailed @76 :Bool;  # NAP: bounded pedal authority acquisition failed
+  mapSpeedLimit @77 :Float32;  # NAP: debounced MCU map speed limit (m/s), 0 when none is usable
+  mapSpeedApplied @78 :Bool;  # NAP: a map-speed stalk pull just retargeted the set speed
+  mapSpeedUnavailable @79 :Bool;  # NAP: a map-speed stalk pull found no usable limit
 
   # cruise state
   cruiseState @10 :CruiseState;

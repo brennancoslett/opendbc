@@ -132,6 +132,15 @@ def update_preap(cs, can_parsers):
         cs.prev_stalk_follow = stalk_follow
 
   curr_time_ms = _current_time_millis()
+
+  # Map speed limit from the MCU. Debounced here every frame so a stalk pull
+  # reads an already-settled value instead of whatever arrived last.
+  cs.map_speed.update(cp_chassis.vl["UI_gpsVehicleSpeed"]["UI_mppSpeedLimit"],
+                      cp_chassis.ts_nanos["UI_gpsVehicleSpeed"]["UI_mppSpeedLimit"],
+                      curr_time_ms)
+  map_speed_target_kph = cs.map_speed.target_kph(cs.speed_units, nap_conf.map_speed_offset,
+                                                 curr_time_ms)
+
   use_pedal = nap_conf.use_pedal
   pedal_factor = float(nap_conf.pedal_factor)
   pedal_transform_valid = math.isfinite(pedal_factor) and abs(pedal_factor) > 1e-6
@@ -141,7 +150,8 @@ def update_preap(cs, can_parsers):
   button_events = cs.engagement.process_buttons(
     cs.cruise_buttons, cs.prev_cruise_buttons, curr_time_ms,
     ret.vEgo, cs.speed_units, use_pedal, pedal_long_allowed,
-    long_control_allowed, cs.real_brake_pressed, cs.di_cruise_state)
+    long_control_allowed, cs.real_brake_pressed, cs.di_cruise_state,
+    map_speed_target_kph)
   # Suppress brakePressed so generic brake-disengage path doesn't kill lateral
   ret.brakePressed = False
   ret.buttonEvents = button_events
@@ -216,6 +226,9 @@ def update_preap(cs, can_parsers):
   ret.vdasLimitedAccel = float(getattr(cs, 'vdas_limited_accel', 0.0))
   ret.pedalCommandDi = float(getattr(cs, 'pedal_command_di', 0.0))
   ret.pedalAuthorityFailed = bool(cs.engagement.pedal_unavailable)
+  ret.mapSpeedLimit = cs.map_speed.limit_ms(cs.speed_units, curr_time_ms)
+  ret.mapSpeedApplied = cs.engagement.map_speed_event == "mapSpeedApplied"
+  ret.mapSpeedUnavailable = cs.engagement.map_speed_event == "mapSpeedUnavailable"
 
   return ret
 
@@ -224,6 +237,10 @@ def get_preap_can_parsers(CP):
   chassis_messages = [
     ("ESP_B", 0), ("BrakeMessage", 0), ("DI_state", 0), ("DI_torque2", 0),
     ("GTW_carState", 0), ("STW_ANGLHP_STAT", 0), ("EPAS_sysStatus", 0), ("STW_ACTN_RQ", 0),
+    # Map speed limit. Unchecked (0 Hz) like the rest: the MCU can go quiet
+    # without that being a reason to fault the whole chassis parser. Staleness
+    # is handled in MapSpeedLimit instead.
+    ("UI_gpsVehicleSpeed", 0),
   ]
   pt_messages = [("DI_torque1", 0), ("ESP_B", 0)]
   party_messages = [("ESP_B", 0)]

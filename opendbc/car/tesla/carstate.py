@@ -6,6 +6,7 @@ from opendbc.car.interfaces import CarStateBase
 from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_THRESHOLD, CAR, TeslaLegacyParams, LEGACY_CARS
 from opendbc.car.tesla.preap.nap_conf import nap_conf
 from opendbc.car.tesla.preap.engagement import PreAPEngagement
+from opendbc.car.tesla.preap.map_speed import MapSpeedLimit
 from opendbc.car.tesla.preap.pedal_feedback import PedalFeedback
 from opendbc.car.tesla.preap.carstate import update_preap, get_preap_can_parsers
 
@@ -54,7 +55,9 @@ class CarState(CarStateBase):
       self.engagement = PreAPEngagement(
         double_pull_enabled=nap_conf.double_pull_enabled,
         double_pull_window_ms=nap_conf.double_pull_window_ms,
+        map_speed_pull_count=nap_conf.map_speed_pull_count,
       )
+      self.map_speed = MapSpeedLimit()
       # Bridge attributes: carcontroller reads these via getattr(CS, 'X', default)
       self.cruiseEnabled = False
       self.enableLongControl = False

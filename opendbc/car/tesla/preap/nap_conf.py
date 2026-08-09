@@ -22,6 +22,8 @@ CONFIG_FILE = "/data/nap_params.json"
 
 DEFAULT_CONFIG = {
   'double_pull_window_ms': 400,
+  'map_speed_offset': 5,
+  'map_speed_pull_count': 4,
   'use_pedal': False,
   'pedal_calibrated': False,
   'accel_profile': 'Chill',
@@ -236,6 +238,28 @@ class NAPConf:
     self._put('double_pull_window_ms', max(300, min(1500, int(value))))
 
   @property
+  def map_speed_offset(self):
+    """How far above the map speed limit a map-speed pull sets the target.
+
+    In the cluster's display units, so a driver reading MPH gets mph.
+    """
+    return max(-10, min(15, int(self._get('map_speed_offset', 5))))
+
+  @map_speed_offset.setter
+  def map_speed_offset(self, value):
+    self._put('map_speed_offset', max(-10, min(15, int(value))))
+
+  @property
+  def map_speed_pull_count(self):
+    # Floored at 4: pulls 1-3 are taken (lateral-only, engage, resume), and
+    # letting this drop into that range would silently retire one of them.
+    return max(4, min(6, int(self._get('map_speed_pull_count', 4))))
+
+  @map_speed_pull_count.setter
+  def map_speed_pull_count(self, value):
+    self._put('map_speed_pull_count', max(4, min(6, int(value))))
+
+  @property
   def accel_profile(self):
     val = self._get('accel_profile', 'Chill')
     return val if val in ACCEL_MAX_PROFILES else 'Chill'
@@ -404,6 +428,8 @@ class NAPConf:
   def get_all_params(self):
     return {
       'double_pull_window_ms': self.double_pull_window_ms,
+      'map_speed_offset': self.map_speed_offset,
+      'map_speed_pull_count': self.map_speed_pull_count,
       'use_pedal': self.use_pedal,
       'pedal_calibrated': self.pedal_calibrated,
       'accel_profile': self.accel_profile,
