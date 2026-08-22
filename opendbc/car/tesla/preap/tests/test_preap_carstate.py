@@ -50,7 +50,8 @@ class TestPreAPCarStateUpdate(unittest.TestCase):
                   "pedalAuthorityState", "pedalAuthorityAction", "pedalCommandCounter",
                   "pedalFeedbackState", "pedalFeedbackCounter", "pedalFirstEnabledMonoTime",
                   "vdasLimitedAccel", "pedalCommandDi", "pedalAuthorityFailed",
-                  "mapSpeedLimit", "mapSpeedApplied", "mapSpeedUnavailable"):
+                  "mapSpeedLimit", "mapSpeedApplied", "mapSpeedUnavailable",
+                  "mapSpeedLimitDisplay", "mapSpeedLimitHeld", "mapSpeedLimitRaw"):
       self.assertTrue(hasattr(CS, field), f"CarState schema missing {field}")
 
   def test_regen_brake_prompt_uses_controller_level_state(self):

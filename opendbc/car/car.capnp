@@ -224,6 +224,9 @@ struct CarState {
   mapSpeedLimit @77 :Float32;  # NAP: debounced MCU map speed limit (m/s), 0 when none is usable
   mapSpeedApplied @78 :Bool;  # NAP: a map-speed stalk pull just retargeted the set speed
   mapSpeedUnavailable @79 :Bool;  # NAP: a map-speed stalk pull found no usable limit
+  mapSpeedLimitDisplay @80 :Float32;  # NAP: MCU map speed limit for the readout (m/s), held across gaps, 0 when blank
+  mapSpeedLimitHeld @81 :Bool;  # NAP: the readout is carrying a value the MCU has stopped reporting
+  mapSpeedLimitRaw @82 :Float32;  # NAP: unfiltered UI_mppSpeedLimit (m/s), placeholder included, for diagnosing a wrong sign
 
   # cruise state
   cruiseState @10 :CruiseState;

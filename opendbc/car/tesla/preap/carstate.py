@@ -137,7 +137,7 @@ def update_preap(cs, can_parsers):
   # reads an already-settled value instead of whatever arrived last.
   cs.map_speed.update(cp_chassis.vl["UI_gpsVehicleSpeed"]["UI_mppSpeedLimit"],
                       cp_chassis.ts_nanos["UI_gpsVehicleSpeed"]["UI_mppSpeedLimit"],
-                      curr_time_ms)
+                      curr_time_ms, ret.vEgo)
   map_speed_target_kph = cs.map_speed.target_kph(cs.speed_units, nap_conf.map_speed_offset,
                                                  curr_time_ms)
 
@@ -227,6 +227,11 @@ def update_preap(cs, can_parsers):
   ret.pedalCommandDi = float(getattr(cs, 'pedal_command_di', 0.0))
   ret.pedalAuthorityFailed = bool(cs.engagement.pedal_unavailable)
   ret.mapSpeedLimit = cs.map_speed.limit_ms(cs.speed_units, curr_time_ms)
+  # The readout's own view of the same signal: held across gaps, so it is not
+  # the value anything is allowed to act on.
+  ret.mapSpeedLimitDisplay = cs.map_speed.display_limit_ms(cs.speed_units, curr_time_ms)
+  ret.mapSpeedLimitHeld = bool(cs.map_speed.display_held) and ret.mapSpeedLimitDisplay > 0.0
+  ret.mapSpeedLimitRaw = cs.map_speed.raw_ms(cs.speed_units)
   ret.mapSpeedApplied = cs.engagement.map_speed_event == "mapSpeedApplied"
   ret.mapSpeedUnavailable = cs.engagement.map_speed_event == "mapSpeedUnavailable"
 
