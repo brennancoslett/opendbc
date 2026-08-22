@@ -9,16 +9,22 @@
 #   relaxed(2)    → gentle, minimal push
 ACCEL_PREAP_BP = [0.0, 1.3, 7.5, 15.0, 25.0, 30.0, 40.0]  # m/s
 #                  0    3    17    33    56    67    90  mph
+# The first two breakpoints are the launch, and they were the Tinkla values:
+# 0.3 m/s2 from a standstill takes four seconds to reach walking pace, which
+# makes a resume from a stop read as a failure to move. Raised to roughly what
+# an ordinary car does off the line, then backed off once it had been driven:
+# the first pass at 0.75 standard was more than the resume needed. Everything
+# from 7.5 m/s up is untouched.
 ACCEL_PREAP_PROFILES = {
-  0: [0.3, 0.8, 1.1, 1.0, 0.85, 0.7, 0.6],  # aggressive
-  1: [0.3, 0.7, 1.0, 0.9, 0.8, 0.6, 0.5],  # standard
-  2: [0.3, 0.6, 0.9, 0.8, 0.7, 0.5, 0.45],  # relaxed (former standard values)
+  0: [0.6, 0.9, 1.1, 1.0, 0.85, 0.7, 0.6],  # aggressive
+  1: [0.5, 0.8, 1.0, 0.9, 0.8, 0.6, 0.5],  # standard
+  2: [0.4, 0.7, 0.9, 0.8, 0.7, 0.5, 0.45],  # relaxed (former standard values)
 }
 
 # When following a lead car, cap positive accel to these values regardless
 # of personality. Prevents overshoot → regen → overshoot oscillation.
 # Open road uses the full profile above; this only limits follow mode.
-ACCEL_PREAP_FOLLOW = [0.3, 0.6, 0.9, 0.8, 0.7, 0.5, 0.45]
+ACCEL_PREAP_FOLLOW = [0.4, 0.7, 0.9, 0.8, 0.7, 0.5, 0.45]
 
 # Generic LongControl passes the planner acceleration target through with
 # kf=1.0 and no feedback. VirtualDAS owns acceleration feedback and converts

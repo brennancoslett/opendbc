@@ -4,7 +4,7 @@ Tests for feedforward-dominant pedal longitudinal control.
 Validates:
   1. Rate limiter prevents WOT-on-engage (pedal ramps at ≤PEDAL_RAMP_RATE_UP/step)
   2. Rate limiter allows smooth ramp-down to max regen
-  3. ACCEL_PREAP_PROFILES use Tinkla Pedal values (0.3 at standstill)
+  3. ACCEL_PREAP_PROFILES launch briskly enough to resume from a stop
   4. Updated ki values match feedforward-dominant architecture
   5. Regen is uncapped at -1.5 m/s² (full regen at all speeds)
   6. Actuator delay is set correctly
@@ -63,13 +63,23 @@ class TestAccelProfiles(unittest.TestCase):
   """Verify ACCEL_PREAP_PROFILES standstill values per personality."""
 
   def test_aggressive_standstill(self):
-    self.assertAlmostEqual(ACCEL_PREAP_PROFILES[0][0], 0.3)
+    self.assertAlmostEqual(ACCEL_PREAP_PROFILES[0][0], 0.6)
 
   def test_standard_standstill(self):
-    self.assertAlmostEqual(ACCEL_PREAP_PROFILES[1][0], 0.3)
+    self.assertAlmostEqual(ACCEL_PREAP_PROFILES[1][0], 0.5)
 
   def test_relaxed_standstill(self):
-    self.assertAlmostEqual(ACCEL_PREAP_PROFILES[2][0], 0.3)
+    self.assertAlmostEqual(ACCEL_PREAP_PROFILES[2][0], 0.4)
+
+  def test_standstill_is_ordered_by_personality(self):
+    standstill = [ACCEL_PREAP_PROFILES[p][0] for p in (2, 1, 0)]
+    self.assertEqual(standstill, sorted(standstill))
+
+  def test_launch_reaches_walking_pace_promptly(self):
+    # 1.3 m/s is the second breakpoint. Below about 0.5 m/s2 the car reads as
+    # not responding to a resume at all.
+    for p in (0, 1, 2):
+      self.assertGreaterEqual(ACCEL_PREAP_PROFILES[p][0], 0.4)
 
   def test_profiles_have_correct_length(self):
     for p in (0, 1, 2):
